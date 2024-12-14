@@ -550,7 +550,7 @@ int gguf_debug(gguf_cxt_t* ctx){
 		for (uint32_t j = 0; j < info->n_dims; ++j, ch=',') {
 			fprintf(stdout, "%c%d", ch, info->ne[j]);
 		}
-		fprintf(stdout, "]\n"); 
+		fprintf(stdout, "]| %2d | 0x%08x\n", info->type, info->offset); 
 	}
 		
 }
