@@ -1,8 +1,19 @@
+/*
+
+Сборка 
+	$ gcc -DTEST_GGUF -o test qnn_gguf.c `pkgconf --cflags --libs glib-2.0
+	$ gcc -DTEST_GGUF -o test qnn_gguf.c qnn_png.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
+Тестирование
+	$ ./test.exe ../../llama.cpp/models/Qwen2.5.1-Coder-7B-Instruct-Q4_K_M.gguf
+*/
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <math.h>
 #include <glib.h>
 #define GGML_MAX_DIMS 	4
 #define GGUF_MAGIC 		"GGUF"
@@ -19,7 +30,7 @@ struct _gguf_ctx {
 	struct gguf_kv* kv;
 	struct gguf_tensor_info* infos;
 	void* data;
-	off_t offset; // data segment 
+	uint64_t offset; // data segment 
 
 	size_t size;
 	unsigned alignment;
@@ -87,20 +98,53 @@ enum ggml_type: uint32_t {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_COUNT   = 39,
 };
+static const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
+[GGML_TYPE_F32 ]    = "F32",
+[GGML_TYPE_F16 ]    = "F16",
+[GGML_TYPE_Q4_0]    = "Q4_0",
+[GGML_TYPE_Q4_1]    = "Q4_1",
+[GGML_TYPE_Q5_0]    = "Q5_0",
+[GGML_TYPE_Q5_1]    = "Q5_1",
+[GGML_TYPE_Q8_0]    = "Q8_0",
+[GGML_TYPE_Q8_1]    = "Q8_1",
+[GGML_TYPE_Q2_K]    = "Q2_K",
+[GGML_TYPE_Q3_K]    = "Q3_K",
+[GGML_TYPE_Q4_K]    = "Q4_K",
+[GGML_TYPE_Q5_K]    = "Q5_K",
+[GGML_TYPE_Q6_K]    = "Q6_K",
+[GGML_TYPE_Q8_K]    = "Q8_K",
+[GGML_TYPE_IQ2_XXS] = "IQ2_XXS",
+[GGML_TYPE_IQ2_XS ] = "IQ2_XS",
+[GGML_TYPE_IQ3_XXS] = "IQ3_XXS",
+[GGML_TYPE_IQ1_S ]  = "IQ1_S",
+[GGML_TYPE_IQ4_NL]  = "IQ4_NL",
+[GGML_TYPE_IQ3_S ]  = "IQ3_S",
+[GGML_TYPE_IQ2_S ]  = "IQ2_S",
+[GGML_TYPE_IQ4_XS]  = "IQ4_XS",
+[GGML_TYPE_I8 ]     = "I8",
+[GGML_TYPE_I16]     = "I16",
+[GGML_TYPE_I32]     = "I32",
+[GGML_TYPE_I64]     = "I64",
+[GGML_TYPE_F64]     = "F64",
+[GGML_TYPE_IQ1_M]   = "IQ1_M",
+[GGML_TYPE_BF16 ]   = "BF16",
+[GGML_TYPE_TQ1_0]   = "TQ1_0",
+[GGML_TYPE_TQ2_0]   = "TQ2_0",
+};
 static const size_t GGUF_TYPE_SIZE[GGUF_TYPE_COUNT] = {
-    [GGUF_TYPE_UINT8]   = sizeof(uint8_t),
-    [GGUF_TYPE_INT8]    = sizeof(int8_t),
+    [GGUF_TYPE_UINT8 ]  = sizeof(uint8_t),
+    [GGUF_TYPE_INT8  ]  = sizeof(int8_t),
     [GGUF_TYPE_UINT16]  = sizeof(uint16_t),
-    [GGUF_TYPE_INT16]   = sizeof(int16_t),
+    [GGUF_TYPE_INT16 ]  = sizeof(int16_t),
     [GGUF_TYPE_UINT32]  = sizeof(uint32_t),
-    [GGUF_TYPE_INT32]   = sizeof(int32_t),
+    [GGUF_TYPE_INT32 ]  = sizeof(int32_t),
     [GGUF_TYPE_FLOAT32] = sizeof(float),
-    [GGUF_TYPE_BOOL]    = sizeof(bool),
+    [GGUF_TYPE_BOOL  ]  = sizeof(bool),
     [GGUF_TYPE_STRING]  = sizeof(struct gguf_str),
     [GGUF_TYPE_UINT64]  = sizeof(uint64_t),
-    [GGUF_TYPE_INT64]   = sizeof(int64_t),
+    [GGUF_TYPE_INT64 ]  = sizeof(int64_t),
     [GGUF_TYPE_FLOAT64] = sizeof(double),
-    [GGUF_TYPE_ARRAY]   = 0, // undefined
+    [GGUF_TYPE_ARRAY ]  = 0, // undefined
 };
 static size_t gguf_type_size(enum gguf_type type) {
     //GGML_ASSERT(0 <= type && type < GGUF_TYPE_COUNT);
@@ -188,12 +232,12 @@ gguf_cxt_t * gguf_init_empty(void) {
 
     return ctx;
 }
-static bool gguf_fread(FILE * file, void * dst, size_t size, off_t *offset) {
+static bool gguf_fread(FILE * file, void * dst, size_t size, uint64_t *offset) {
     size_t res = fread(dst, 1, size, file);
-	offset += res;
+	*offset += res;
 	return res == size;
 }
-static bool gguf_fread_str(FILE * file, struct gguf_str * p, off_t * offset) {
+static bool gguf_fread_str(FILE * file, struct gguf_str * p, uint64_t *offset) {
     p->n    = 0;
     p->data = NULL;
 
@@ -252,6 +296,7 @@ static void gguf_free(gguf_cxt_t* ctx){
 		g_free(ctx->infos);
 	g_free(ctx);
 }
+/*! \brief */
 gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init_params */params) {
     FILE * file = fopen(fname, "rb");
     if (file==NULL) {
@@ -260,7 +305,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
     }
 
     // offset from start of file
-    off_t offset = 0;
+    uint64_t	offset = 0;
     int res;
 
     gguf_cxt_t * ctx = g_malloc0(sizeof(struct gguf_context));
@@ -308,82 +353,82 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
 
 //            fprintf(stderr, "%s: reading kv %d\n", __func__, i);
 
-            gguf_fread_str(file, &kv->key,                    &offset);
+            gguf_fread_str(file, &kv->key,                 &offset);
             gguf_fread (file, &kv->type, sizeof(kv->type), &offset);
 
 //            fprintf(stderr, "%s: %3d| %-.29s|\n", __func__, i, kv->key.data);
 
             switch (kv->type) {
-                case GGUF_TYPE_UINT8:   
-                case GGUF_TYPE_INT8:    
-                case GGUF_TYPE_UINT16:  
-                case GGUF_TYPE_INT16:   
-                case GGUF_TYPE_UINT32:  
-                case GGUF_TYPE_INT32:   
-                case GGUF_TYPE_FLOAT32: 
-                case GGUF_TYPE_UINT64:  
-                case GGUF_TYPE_INT64:   
-                case GGUF_TYPE_FLOAT64: 
-                case GGUF_TYPE_BOOL:    
-					res = res &&  gguf_fread(file, &kv->value.int32, gguf_type_size(kv->type),   &offset); break;
-                case GGUF_TYPE_STRING:  
-					res = res &&  gguf_fread_str(file, &kv->value.str, &offset); break;
-                case GGUF_TYPE_ARRAY:
-                    {
-                        res = res &&  gguf_fread(file, &kv->value.arr.type, sizeof(kv->value.arr.type), &offset);
-                        res = res &&  gguf_fread(file, &kv->value.arr.n,    sizeof(kv->value.arr.n),    &offset);
+			case GGUF_TYPE_UINT8:   
+			case GGUF_TYPE_INT8:    
+			case GGUF_TYPE_UINT16:  
+			case GGUF_TYPE_INT16:   
+			case GGUF_TYPE_UINT32:  
+			case GGUF_TYPE_INT32:   
+			case GGUF_TYPE_FLOAT32: 
+			case GGUF_TYPE_UINT64:  
+			case GGUF_TYPE_INT64:   
+			case GGUF_TYPE_FLOAT64: 
+			case GGUF_TYPE_BOOL:    
+				res = res &&  gguf_fread(file, &kv->value.int32, gguf_type_size(kv->type),   &offset); break;
+			case GGUF_TYPE_STRING:  
+				res = res &&  gguf_fread_str(file, &kv->value.str, &offset); break;
+			case GGUF_TYPE_ARRAY:
+				{
+					res = res &&  gguf_fread(file, &kv->value.arr.type, sizeof(kv->value.arr.type), &offset);
+					res = res &&  gguf_fread(file, &kv->value.arr.n,    sizeof(kv->value.arr.n),    &offset);
 
-                        switch (kv->value.arr.type) {
-                            case GGUF_TYPE_UINT8:
-                            case GGUF_TYPE_INT8:
-                            case GGUF_TYPE_UINT16:
-                            case GGUF_TYPE_INT16:
-                            case GGUF_TYPE_UINT32:
-                            case GGUF_TYPE_INT32:
-                            case GGUF_TYPE_FLOAT32:
-                            case GGUF_TYPE_UINT64:
-                            case GGUF_TYPE_INT64:
-                            case GGUF_TYPE_FLOAT64:
-                            case GGUF_TYPE_BOOL:
-                                {
+					switch (kv->value.arr.type) {
+					case GGUF_TYPE_UINT8:
+					case GGUF_TYPE_INT8:
+					case GGUF_TYPE_UINT16:
+					case GGUF_TYPE_INT16:
+					case GGUF_TYPE_UINT32:
+					case GGUF_TYPE_INT32:
+					case GGUF_TYPE_FLOAT32:
+					case GGUF_TYPE_UINT64:
+					case GGUF_TYPE_INT64:
+					case GGUF_TYPE_FLOAT64:
+					case GGUF_TYPE_BOOL:
+						{
 
-                                    kv->value.arr.data = g_malloc(kv->value.arr.n* gguf_type_size(kv->value.arr.type));
-                                    if (!kv->value.arr.data) {
-                                        fprintf(stderr, "%s: failed to allocate memory for array\n", __func__);
-                                        fclose(file);
-                                        gguf_free(ctx);
-                                        return NULL;
-                                    }
+							kv->value.arr.data = g_malloc(kv->value.arr.n* gguf_type_size(kv->value.arr.type));
+							if (!kv->value.arr.data) {
+								fprintf(stderr, "%s: failed to allocate memory for array\n", __func__);
+								fclose(file);
+								gguf_free(ctx);
+								return NULL;
+							}
 
-                                    res = res && gguf_fread(file, kv->value.arr.data, kv->value.arr.n * gguf_type_size(kv->value.arr.type), &offset);
-                                } break;
-                            case GGUF_TYPE_STRING:
-                                {
-                                    kv->value.arr.data = g_malloc(kv->value.arr.n* sizeof(struct gguf_str));
-                                    if (!kv->value.arr.data) {
-                                        fprintf(stderr, "%s: failed to allocate memory for array\n", __func__);
-                                        fclose(file);
-                                        gguf_free(ctx);
-                                        return NULL;
-                                    }
+							res = res && gguf_fread(file, kv->value.arr.data, kv->value.arr.n * gguf_type_size(kv->value.arr.type), &offset);
+						} break;
+					case GGUF_TYPE_STRING:
+						{
+							kv->value.arr.data = g_malloc(kv->value.arr.n* sizeof(struct gguf_str));
+							if (!kv->value.arr.data) {
+								fprintf(stderr, "%s: failed to allocate memory for array\n", __func__);
+								fclose(file);
+								gguf_free(ctx);
+								return NULL;
+							}
 
-                                    for (uint64_t j = 0; j < kv->value.arr.n; ++j) {
-                                        res = res && gguf_fread_str(file, &((struct gguf_str *) kv->value.arr.data)[j], &offset);
-                                    }
-                                } break;
-                            case GGUF_TYPE_ARRAY:
-                            default:
-                                {
-                                    fprintf(stderr, "%s: invalid array type %d\n", __func__, kv->value.arr.type);
-                                    res = false;
-                                } break;
-                        }
-                    } break;
-                default:
-                    {
-                        fprintf(stderr, "%s: invalid type %d\n", __func__, kv->type);
-                        res = 0;
-                    } break;
+							for (uint64_t j = 0; j < kv->value.arr.n; ++j) {
+								res = res && gguf_fread_str(file, &((struct gguf_str *) kv->value.arr.data)[j], &offset);
+							}
+						} break;
+					case GGUF_TYPE_ARRAY:
+					default:
+						{
+							fprintf(stderr, "%s: invalid array type %d\n", __func__, kv->value.arr.type);
+							res = false;
+						} break;
+					}
+				} break;
+			default:
+				{
+					fprintf(stderr, "%s: invalid type %d\n", __func__, kv->type);
+					res = 0;
+				} break;
             }
 
             if (!res) {
@@ -398,7 +443,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
             return NULL;
         }
     }
-//return  ctx;
+	fprintf(stdout, "info offset: %u kB\n", (offset/1024));
     // read the tensor infos
     if (ctx->header.n_tensors > 0) {
         ctx->infos = g_malloc0(ctx->header.n_tensors * sizeof(struct gguf_tensor_info));
@@ -445,6 +490,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
             }
         }
     }
+fprintf(stdout, "data offset: %ld kB\n", (uint32_t)(ctx->offset/1024));
 
     ctx->alignment = GGUF_DEFAULT_ALIGNMENT;
 
@@ -458,13 +504,14 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
         const size_t offset_pad = offset % ctx->alignment;
         if (offset_pad != 0) {
             offset += ctx->alignment - offset_pad;
-            fseek(file, offset, SEEK_SET);
+            fseeko(file, offset, SEEK_SET);
         }
     }
     // store the current file offset - this is where the data section starts
     ctx->offset = offset;
     // compute the total size of the data section, taking into account the alignment
     // load the tensor data only if requested
+//	fprintf(stdout, "data offset: %d kB\n", ctx->offset/1024);
     fclose(file);
 
     return ctx;
@@ -542,23 +589,228 @@ int gguf_debug(gguf_cxt_t* ctx){
 			fprintf(stdout, "\n"); break;
 		}
 	}
-	fprintf(stdout, "model info:\n");
+	fprintf(stdout, "2. model info:\n");
+	fprintf(stdout, "| %-30s| %-6s| %s | \n", "Name", "quants", "dims");
+	fprintf(stdout, "|:--- |:--- | :--- |:---\n");
 	for(uint64_t i=0; i<ctx->header.n_tensors; ++i){
 		struct gguf_tensor_info * info = &ctx->infos[i];
-		fprintf(stdout, "%-.*s ", info->name.n,info->name.data );
+		const char* type_name = GGML_TYPE_NAME[info->type];
+		fprintf(stdout, "| %-30.*s| %-6s| 0x%010llx ", info->name.n,info->name.data, (type_name!=NULL? type_name: "??"), info->offset);
 		char ch='[';
 		for (uint32_t j = 0; j < info->n_dims; ++j, ch=',') {
 			fprintf(stdout, "%c%d", ch, info->ne[j]);
 		}
-		fprintf(stdout, "]| %2d | 0x%08x\n", info->type, info->offset); 
+		fprintf(stdout, "]\n" ); 
 	}
-		
+	// Статистика по типу квантизации и по 
+	fprintf(stdout, "num tensors: %ld\n", ctx->header.n_tensors);
+	fprintf(stdout, "data offset: %ld kB\n", (uint32_t)(ctx->offset/1024));
 }
+
+typedef struct _MainOptions MainOptions;
+struct _MainOptions {
+	char*  input_file;
+	char* output_file;
+	char* group;
+	char* device;
+	char* name;// имя параметра для вывода в файл
+
+	int   overwrite;
+	int   verbose;
+	int   version;
+};
+static MainOptions options= {
+    .output_file = NULL,
+
+};
+static GOptionEntry entries[] =
+{
+  { "input",  	'i', 0, G_OPTION_ARG_FILENAME, &options.input_file,  "input filename", 	"*.gguf"},
+  { "output", 	'o', 0, G_OPTION_ARG_FILENAME, &options.output_file, "output filename", "*.gguf" },
+  { "name", 	'n', 0, G_OPTION_ARG_STRING,   &options.name, "name", "blk.*.attn_k.weight" },
+
+  { "overwrite",'O', 0, G_OPTION_ARG_NONE, &options.overwrite, "overwtite output", NULL },
+  { "verbose", 	'v', 0, G_OPTION_ARG_NONE, &options.verbose, "Be verbose", NULL },
+  { "version", 	'V', 0, G_OPTION_ARG_NONE, &options.version, "program info", NULL },
+  { NULL }
+};
+extern int write_png(char *file_name, uint8_t* image, int width, int height);
+
+#define QK_K 256
+#define K_SCALE_SIZE 12
+// 4-bit quantization
+// 8 blocks of 32 elements each
+// weight is represented as x = a * q + b
+// Effectively 4.5 bits per weight
+typedef struct {
+    struct {
+		_Float16 d;    // super-block scale for quantized scales
+		_Float16 dmin; // super-block scale for quantized mins
+    };
+    uint8_t scales[K_SCALE_SIZE]; // scales and mins, quantized with 6 bits
+    uint8_t qs[QK_K/2];           // 4--bit quants
+} block_q4_K;
+#if defined(__F16C__)
+#include <intrin.h>
+	#define GGML_FP16_TO_FP32(x) _cvtsh_ss(*(uint16_t*)&(x))
+    #define GGML_FP32_TO_FP16(x) _cvtss_sh(x, 0)
+#else
+	#define GGML_FP16_TO_FP32(x) (_Float16)(x)
+#endif
+#define QK8_0 32
+typedef struct {
+    _Float16 d;       // delta
+    int8_t  qs[QK8_0]; // quants
+} block_q8_0;
+
+static inline void get_scale_min_k4(int j, const uint8_t * restrict q, uint8_t * restrict d, uint8_t * restrict m) {
+    if (j < 4) {
+        *d = q[j] & 63; *m = q[j + 4] & 63;
+    } else {
+        *d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
+        *m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
+    }
+}
+
+float dequantize_row_q4_K(const block_q4_K * restrict x, float * restrict y, int64_t k) 
+{
+//    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+	float y_max = 0;
+    for (int i = 0; i < nb; i++) {
+        const uint8_t * q = x[i].qs;
+
+        const float d   = GGML_FP16_TO_FP32(x[i].d);
+        const float min = GGML_FP16_TO_FP32(x[i].dmin);
+
+        int is = 0;
+        uint8_t sc, m;
+        for (int j = 0; j < QK_K; j += 64) {
+            get_scale_min_k4(is + 0, x[i].scales, &sc, &m);
+            const float d1 = d * sc; const float m1 = min * m;
+            get_scale_min_k4(is + 1, x[i].scales, &sc, &m);
+            const float d2 = d * sc; const float m2 = min * m;
+			if (d1>y_max) y_max = d1;
+			if (d2>y_max) y_max = d2;
+            for (int l = 0; l < 32; ++l) *y++ = d1 * (q[l] & 0xF) - m1;
+            for (int l = 0; l < 32; ++l) *y++ = d2 * (q[l]  >> 4) - m2;
+            q += 32; is += 2;
+        }
+    }
+	return y_max;
+}
+
+float dequantize_row_q8_0(const block_q8_0 * restrict x, float * restrict y, int64_t k) {
+    static const int qk = QK8_0;
+
+//    assert(k % qk == 0);
+	uint32_t zero_blk=0;
+    const int nb = k / qk;
+
+	float d_max = -INFINITY;
+	float d_min =  INFINITY;
+//	printf("d(0)=%f %f %f...\n", x[0].d, x[1].d, x[2].d);
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+		if(d>d_max) d_max = d;
+		if(d<d_min) d_min = d;
+		if(d==0.0f) zero_blk++;
+        for (int j = 0; j < qk; ++j) {
+            y[i*qk + j] = x[i].qs[j]*d;
+        }
+    }
+//	printf("d(%d/%d)=%f %f %f...\n", zero_blk,nb, GGML_FP16_TO_FP32(x[0].d), GGML_FP16_TO_FP32(x[1].d), GGML_FP16_TO_FP32(x[2].d));
+	printf("d(%d/%d)=%f %f ...\n", zero_blk,nb, d_min, d_max);
+	return d_max;
+}
+
+#if defined(_WIN32)
+    // use FILE * so we don't have to re-open the file to mmap
+#include <windows.h>
+
+uint8_t* blk_load(const char* path, uint64_t offset, size_t size ){
+	FILE* file = fopen(path, "rb");
+	HANDLE fp_win32;
+	fp_win32 = (HANDLE) _get_osfhandle(_fileno(file));
+	
+	if (file==NULL) {
+		printf(" fopen failed (%d) %s 0x%llx\n", errno, strerror(errno), offset);
+	}
+//	int res = _fseeki64(file, (int64_t)offset, SEEK_SET);
+
+	LARGE_INTEGER li;
+	li.QuadPart = offset;
+	BOOL ret = SetFilePointerEx(fp_win32, li, NULL, SEEK_SET);
+
+	if (!ret) {
+		printf(" seek failed (%d) %s\n", errno, strerror(errno));
+	}
+	uint8_t *blk = g_malloc(size);
+	uint64_t offs = 0;
+	do{
+		size_t chunk = (size-offs)<64*1024*1024? size-offs: 64*1024*1024;
+		DWORD chunk_read = 0;
+		BOOL result = ReadFile(fp_win32, blk + offs, chunk, &chunk_read, NULL);
+		offs+= chunk_read;
+		//fread (blk+offs,1,chank, file);
+	} while(size>offs);
+	fclose(file);
+	return blk;
+}
+#endif
 int main (int argc, char *argv[]){
+	GError* error=NULL;
+	GOptionContext *opt_context;
+    opt_context = g_option_context_new ("- command line interface");
+    g_option_context_add_main_entries (opt_context, entries, NULL/*GETTEXT_PACKAGE*/);
+    if (!g_option_context_parse (opt_context, &argc, &argv, &error))
+    {
+        printf ("option parsing failed: %s\n", error->message);
+        _Exit(1);
+    }
+    g_option_context_free (opt_context);
+
 	if (argc<2) return 0;
 	char *path = argv[1];
 	gguf_cxt_t *ctx = gguf_init_from_file(path, 0);
-	gguf_debug(ctx);
+	if (options.verbose) gguf_debug(ctx);
+	// найти матрицу и показать
+	if (options.name!=NULL && options.output_file!=NULL && g_str_has_suffix(options.output_file, ".png")) {
+		struct gguf_tensor_info * info = NULL;
+		int i;
+		int name_len = strlen(options.name);
+		for(i=0; i<ctx->header.n_tensors; ++i){// поиск мнформацаии о тензоре
+			info = &ctx->infos[i];
+			//
+			if (name_len == info->name.n && strncmp(info->name.data, options.name, info->name.n)==0) 
+				break;
+		}
+		
+		if (i==ctx->header.n_tensors) {
+			printf("Tensor '%s' not found\n", options.name);
+		} else {
+			uint32_t width = info->ne[0], height = info->ne[1];
+			const char* type_name = GGML_TYPE_NAME[info->type];
+			printf("Tensor '%s' %s %d x %d 0x%llx %d kB\n", options.name, type_name, width, height, info->offset, info->size/1024);
+			float* data_f32 = g_malloc(sizeof(float)*width*height );
+			//for (uint64_t i = 0; i<height; i++)
+			if (info->type==GGML_TYPE_Q8_0){
+				info->size = (sizeof(block_q8_0)*width*height)/QK8_0;
+				uint8_t*  blk = blk_load(path, info->offset+ctx->offset, info->size);
+				float d_max = dequantize_row_q8_0((const block_q8_0 *)blk, data_f32, width*height);
+				//for(int i = 0; i<width*height; i++) if(data_f32[i]>d_max) d_max = data_f32[i];
+				printf(" - max %e\n", (double)d_max);
+			} else
+			if (info->type==GGML_TYPE_Q4_K){	
+//				dequantize_row_q4_K((const block_q4_K *)blk, data_f32, width*height);
+			} else
+				_Exit(0);
+			
+			//if (0) write_png(options.output_file, (uint8_t*)img, width, height);
+			if (data_f32) g_free(data_f32);
+		}
+	}
 	gguf_free (ctx);
 	return 0;
 }
