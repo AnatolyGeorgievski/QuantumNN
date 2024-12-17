@@ -140,9 +140,10 @@ float gsl_matrix_get(const gsl_matrix_float * m, size_t i, size_t j) {
 * `gsl_blas_sdot` $x^T y$
 * `gsl_blas_sdsdot` $x^T y+ \alpha$
 * `gsl_blas_saxpy` $y = \alpha x + y$
-float  gsl_blas_snrm2  (const gsl_vector_float * X);
-float  gsl_blas_sasum  (const gsl_vector_float * X);
-```
+* `gsl_blas_snrm2`
+* `gsl_blas_sasum`
+
+
 Второй уровень:
 * `gsl_blas_sgemv` оператор  $y = \alpha A x + \beta y$ или $y = \alpha A^T x + \beta y$
 * `gsl_blas_strmv` оператор  $y = \alpha A x$ или $y = \alpha A^T x$
