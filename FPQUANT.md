@@ -114,11 +114,11 @@ title Рис.1m Float4 (FP4) - минимальный формат (E2M1)
 Converts brain16 to float32.
 ```
  bfloat16 floating point format:
-	┌sign
-	│   ┌exponent
-	│   │      ┌mantissa
-	│┌──┴───┐┌─┴───┐
-  0b0000000000000000 brain16
+   ┌sign
+   │   ┌exponent
+   │   │      ┌mantissa
+   │┌──┴───┐┌─┴───┐
+ 0b0000000000000000 brain16
  ```
  
 Since bf16 has the same number of exponent bits as a 32bit float,
