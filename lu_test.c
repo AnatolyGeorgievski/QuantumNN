@@ -197,6 +197,8 @@ int   cmp_eps_m (const float* a, const float* b, float eps);
 int cmp_eps_mn(const float* a, const float* b, float eps, unsigned m, unsigned n);
 float det_m  (const float *lu);
 float trace_m(const float *a);
+void balance(float* A, float *D, unsigned m, unsigned n);
+void unbalance(float* A, float *D, unsigned m, unsigned n);
 // восстановить A=LU, A=LDU, A=LDL^T
 void lu_comp	(const float *lu, float* r);
 void ldu_comp	(const float *lu, float* r);
@@ -227,6 +229,7 @@ float cholesky_ldl_det (const float * L);
 // разложение QR
 int  qr_cgs_decomp(float* a, float* r, unsigned m, unsigned n);
 int  qr_decomp	  (float* a, float* r, unsigned m, unsigned n);
+void qr_block_decomp(float* a, float* r, unsigned m, unsigned n);
 int  qr_givens  (float* a, float* r, unsigned m, unsigned n);
 int  qr_house   (float* a, float* r, unsigned m, unsigned n);
 int qr_house2(float * a, float* tau, unsigned m, unsigned n);
@@ -534,6 +537,13 @@ printf("\n");
 	mul_mn(Q4,R4,M4,4,4);
 	if(cmp_eps_mn(M4,B4, eps, 4,4)) printf("..ok\n");
 	if (is_orthogonal(Q4, 4)) printf("..is_orthogonal\n");
+
+	printf("QR block decomp (QR block)\n");
+	mov_mn(B4, Q4, 4, 4);
+	qr_block_decomp(Q4,R4, 4, 4);
+	print_mn(R4, 4, 4);
+	mul_mn(Q4,R4,M4,4,4);
+	if(cmp_eps_mn(M4,B4, eps, 4,4)) printf("..ok\n");
 /*!
 octave> A = [ 0.18, 0.60, 0.57, 0.96;
               0.41, 0.24, 0.99, 0.58;
@@ -548,6 +558,27 @@ ans =
   2.0000
   3.0000
   4.0000 */
+  	float T4[] = {
+		1, 1, 0, 0,
+		0, 2, 1, 0, 
+		0, 0, 3, 1,
+		0.001, 0, 0, 4
+	};
+	float H4[] = {
+		1,    1./2, 1./3, 1./4,
+        1./2, 1./5, 1./4, 1.f/5,
+        1./3, 1./4, 1./6, 1.f/7,
+        1./4, 1./5, 1./7, 1.f/9 };
+	float D4[4];
+	mov_mn(T4, A4, 4, 4);
+	balance(A4, D4, 4,4);
+	unbalance(A4, D4, 4,4);
+
+	printf("Balance\n");
+	for(int i=0; i<4; i++) printf("\t%f", D4[i]);
+	printf("\nA=\n");
+	print_mn(A4, 4, 4);
+
 	return 0;
 }
 /*! \brief вывод на экран печать матриц NxN
@@ -1323,6 +1354,11 @@ void scal_col(float d, float* a, unsigned M, unsigned N, int k){
 	for (int j=0; j<M; ++j)
 		a[j*N+k] *= d;
 }
+static
+void scal_row(float d, float* a, unsigned M, unsigned N, int k){
+	for (int j=0; j<N; ++j)
+		a[k*N+j] *= d;
+}
 
 /*! \brief определяет симметричную матрицу */
 int  is_symmetric(const float* A, int N){
@@ -1574,6 +1610,13 @@ Ftype _vector_exchange(vector_t *v, unsigned i, Ftype value){
 	*r = value;
 	return vi;
 }
+static inline
+void _set_zero(Ftype* a, unsigned M, unsigned N, unsigned lda){
+	unsigned i, j;
+	for (i=0; i<M; i++)
+	for (j=0; j<N; j++)
+		a[i*lda+j] = 0;
+}
 void _set_identity(Ftype* a, unsigned M, unsigned N){
 	for (unsigned i=0; i<M; ++i)
 	for (unsigned j=0; j<N; ++j)
@@ -1783,7 +1826,28 @@ void BLAS(gemm)(int flags,  Ftype alpha, matrix_t* A, matrix_t* B, Ftype beta, m
 	}
 }
 #if 1
-/*! \brief блочный рекурсивный алгоритм 
+/*! \brief QR-decomposition (Modified Gram-Schmidt) повторно
+ */
+static
+int qr_mgs_decomp(float* a, float* r, unsigned M, unsigned N, unsigned lda)
+{
+	float d;
+	unsigned i,j,k;
+	for(j=0; j<N;j++){// по колонкам
+		for (k=0; k<j; k++) r[j*lda+k] = 0;
+		r[j*lda+j] = d = norm_col(a, M, lda, j);
+		//if (r[j*N+j]==0) return j;// линейно зависимая колонка
+		if (d!=0) scal_col(1/d, a, M, lda, j);
+		for (k=j+1; k<N; k++) {
+			r[j*lda+k] = d = dot_col(a, M, lda, j, k);
+			for (i=0; i<M; i++) // column(k)-= u(j)*(a_j^T a_k)// y = y -d x
+				a[i*lda+k] -= a[i*lda+j]*d;
+		}
+	}
+	return 0;
+}
+
+/*! \brief блочный рекурсивный алгоритм QR
 	\param a матрица MxN
 	\param r матрица NxN
 	\return 0 - если процесс завершен
@@ -1797,40 +1861,59 @@ int qr_block(matrix_t* a, matrix_t* r)
 	
 //	ASSERT(N==r->sz[0]);
 //	ASSERT(N==r->sz[1]);
-	if (N<=Nb) // порог перехода к линейному алгоритму
-		return qr_decomp(a->data, r->data, M, N);
-	const size_t N1 = N/2;// SPLIT(N)
-	matrix_t A1 = _submatrix(a->data, 0,  0, M,   N1, a->lda);
-	matrix_t A2 = _submatrix(a->data, 0, N1, M, N-N1, a->lda);
+	const unsigned N1 = N/2;// SPLIT(N)
+	if (N1<Nb) // порог перехода к линейному алгоритму
+		return qr_mgs_decomp(a->data, r->data, M, N, a->lda);
+	matrix_t A1 = _submatrix(a->data, 0,  0,   M,   N1, a->lda);
+	matrix_t A2 = _submatrix(a->data, 0, N1,   M, N-N1, a->lda);
 	matrix_t R11= _submatrix(r->data, 0,  0,   N1,  N1, r->lda);
-	matrix_t R12= _submatrix(r->data, N1, 0, N-N1,  N1, r->lda);
+	matrix_t R12= _submatrix(r->data, 0, N1,   N1,N-N1, r->lda);
 	matrix_t R22= _submatrix(r->data, N1,N1, N-N1,N-N1, r->lda);
+	_set_zero(r->data+r->lda*N1, N-N1, N1, r->lda);// R21
 	qr_block(&A1, &R11);
+	//print_mn(A1.data, N1, N);
 	BLAS(gemm)(CblasTrans,    1, &A1, &A2, 0, &R12); // R_{12} = Q_1^T A_2
 	BLAS(gemm)(CblasNoTrans, -1, &A1, &R12,1, &A2); //  A_2  = A2 - Q_1 R_{12}
 	qr_block(&A2, &R22);
 	return 0;
 }
+void qr_block_decomp(float* a, float* r, unsigned M, unsigned N){
+	const unsigned Nb= 4; 
+	if (N<4){ // порог перехода к линейному алгоритму
+		qr_mgs_decomp(a, r, M, N, N);
+		return;
+	}
+	matrix_t A = _submatrix(a, 0, 0, M, N, N);
+	matrix_t R = _submatrix(r, 0, 0, N, N, N);
+	qr_block(&A, &R);
+}
 #endif
+/*! 
+	\param tau - вектор размер N
+	\param tav - вектор размер M
+ */
 int qr_house_bidi(Ftype * a, Ftype * tau, Ftype * tav, unsigned M,  unsigned N)
 {
 	const unsigned lda = N;
-	for (int j=0; j< N; ++j){
+	for (unsigned j=0; j< N; ++j){
 		vector_t v = _subcolumn(a, j, j, M-j, lda);
 		Ftype tau_j = house(a+lda*j+j, M-j, lda);
-		
-		vector_t w = _subvector(tau,  j+1, N-(j+1), 1);
-		matrix_t m = _submatrix(a, j, j, M-j, N-j, lda);
-		house_left(tau_j, &v, &m, &w);
-
-		if (j+2<=N){
-			vector_t v = _subrow(a, j,  j+1, N-j,   1);
-			Ftype tau_j = house(a+lda*j+j+1, N-j-1, 1);
-
-			vector_t w = _subvector(tav,  j+1, N-(j+1), 1);
+		tau[j] = tau_j;
+		if (j+1<N){		
+			vector_t w = _subvector(tau,  j, N-(j+1), 1);
 			matrix_t m = _submatrix(a, j, j+1, M-j, N-(j+1), lda);
-			house_right(tau_j, &v, &m, &w);
-			
+			house_left(tau_j, &v, &m, &w);
+		}
+
+		if (j+1<N){
+			vector_t v = _subrow(a, j,  j+1, N-j-1, lda);
+			Ftype tau_j = house(a+lda*j+j+1, N-j-1, 1);
+			tav[j] = tau_j;
+			if (j+1<M) {
+				vector_t w = _subvector(tav,  j+1, M-(j+1), 1);
+				matrix_t m = _submatrix(a, j+1, j+1, M-(j+1), N-(j+1), lda);
+				house_right(tau_j, &v, &m, &w);
+			}
 		}
 	}
 }
@@ -1971,21 +2054,19 @@ void ls_house(Ftype * a, Ftype* tau, Ftype* b, unsigned M,  unsigned N)
  */
 int qr_bidiag_decomp (matrix_t * A, vector_t * tau_U, vector_t * tau_V)
 {
-//	ASSERT(   A->sz[0] >= A->sz[1]);
-//	ASSERT(tau_U->size == A->sz[1]);
-//	ASSERT(tau_V->size == A->sz[1]);
-	const size_t M = A->sz[0];
-	const size_t N = A->sz[1];
-	gsl_vector * tmp = _vector_alloc(M);
+	const unsigned M = A->M;
+	const unsigned N = A->N;
+	const unsigned lda = A->lda;
+	vector_t * tmp = _vector_alloc(M);
 
 	for (size_t j = 0 ; j < N; j++)
 	{	/* apply Householder transformation to current column */
-		vector_t v = _matrix_subcolumn(A, j, j, M - j);
-		float tau_j = house (&v);
+		vector_t v = _subcolumn(A, j, j, M - j, lda);
+		float tau_j = house(&v);
 
 		if (j + 1 < N) {/* apply the transformation to the remaining columns */
-			matrix_t m = _matrix_submatrix (A, j, j + 1, M - j, N - j - 1);
-			vector_t w = _vector_subvector(tau_U, j, N - j - 1);
+			matrix_t m = _submatrix (A, j, j + 1, M - j, N - j - 1);
+			vector_t w = _subvector(tau_U, j, N - j - 1);
 			house_left (tau_j, &v, &m, &w);
 		}
 		_vector_set (tau_U, j, tau_j);            
@@ -1993,8 +2074,8 @@ int qr_bidiag_decomp (matrix_t * A, vector_t * tau_U, vector_t * tau_V)
 			v = _matrix_subrow (A, j, j + 1, N - j - 1);
 			tau_j = house (&v);
 			if (j + 1 < M) {/* apply the transformation to the remaining rows */
-                matrix_t m = _matrix_submatrix(A, j + 1, j + 1, M - j - 1, N - j - 1);
-                vector_t w = _vector_subvector(tmp, 0, M - j - 1);
+                matrix_t m = _submatrix(A, j + 1, j + 1, M - j - 1, N - j - 1);
+                vector_t w = _subvector(tmp, 0, M - j - 1);
 				house_right(tau_j, &v, &m, &w);
 			}
 			_vector_set (tau_V, j, tau_j);
@@ -2004,3 +2085,92 @@ int qr_bidiag_decomp (matrix_t * A, vector_t * tau_U, vector_t * tau_V)
 	return 0;
 }
 #endif
+/*! \brief Балансировка матрицы D^{-1}AD
+	\param A матрица MxN
+	\param D диагональные элементы матрицы D 
+	\param M число строк, 
+	\param N число столбцов
+ */
+void balance(Ftype* A, Ftype *D, unsigned M, unsigned N){
+	Ftype c,r,s,f;
+	int p;
+	for (unsigned i=0; i<N; i++) D[i]=1;
+	int converged=0;
+	while( converged==0 ){
+		converged = 1;
+		for (unsigned i=0; i<N; i++){
+			r = c = - fabsf(A[i*N+i]); 
+			for (unsigned j=0; j<N; j++){// 1-norm
+				//if (i!=j)
+				{
+					c += fabsf(A[j*N+i]);
+					r += fabsf(A[i*N+j]);
+				}
+			}
+			if (c==0 || r==0) continue;
+			s = c+r;
+			p = 0;
+			if (c<r)
+				while (ldexpf(c,p+1) < ldexpf(r,-p)) p++;
+			else
+				while (ldexpf(c,p-1) > ldexpf(r,-p)) p--;
+
+			if ((ldexpf(c,p) + ldexpf(r,-p))<0.95*s){
+				converged = 0;
+				if (p!=0){
+					f = ldexpf(1.0f, p);
+					D[i] *= f;// можно сохранить только степень `p`
+					// printf("f=%f\n", f);
+					scal_row(1/f, A, M,N, i);
+					scal_col(  f, A, M,N, i);
+				}
+			}
+		}
+	}
+}
+void unbalance(Ftype* A, Ftype *D, unsigned M, unsigned N){
+	for (unsigned i=0; i<N; i++)
+	{
+		scal_col(1/D[i], A, M,N, i);
+		scal_row(  D[i], A, M,N, i);
+	}
+
+}
+/*! \brief Algorithm 2: Balancing (Parlett and Reinsch) с использованием 2-нормы
+
+Note that $D^{−1}AD$ can be calculated without roundoff. 
+When A is balanced, the computed eigenvalues are usually more accurate
+although there are exceptions. See Parlett and Reinsch (1969) and Watkins(2006)
+*/
+void balance2(Ftype* A, Ftype *D, unsigned M, unsigned N){
+	const Ftype b = 2;// where β is the floating point base. 
+	const Ftype b2 = b*b;
+	Ftype c,r,s;
+	int p;
+	for (unsigned i=0; i<N; i++) D[i]=1;
+	int converged=0;
+	while( converged==0 ){
+		converged = 1;
+		for (unsigned i=0; i<N; i++){
+			r = c = - A[i*N+i]*A[i*N+i];// без диагонального элемента
+			c += dot_col(A, M, N, i, i);
+			r += dot_row(A, M, N, i, i);
+			s = c+r;
+			p = 0;
+			while (c*b2 < r){
+				c *= b2; r /= b2; p++;
+			}
+			while (c >= r*b2){
+				c /= b2; r *= b2; p--;
+			}
+			if ((c+r)<0.95*s){
+				converged = 0;
+				D[i] = ldexpf(D[i],p);
+				Ftype f = ldexpf(1.0f,p);
+				//printf("f=%f\n", f);
+				scal_row(1/f, A, M,N, i);
+				scal_col(  f, A, M,N, i);
+			}
+		}
+	} 
+}
