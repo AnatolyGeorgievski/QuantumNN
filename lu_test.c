@@ -1,7 +1,7 @@
 /*! Много численных методов разложения матриц и решения СЛАУ 
 	см LINALG.md
 	
-	§²°‖≡≠≈∂∆ᵀᴴ
+	§²×°‖≡≠≈∂∆ᵀᴴ ÷×°±²∞∏∑‾≤≥ λμ αβγδε ζηθξ
  */
 
 /*! LU разложение матриц и решение систем СЛАУ методом LU
@@ -61,7 +61,7 @@ QR - разложение матрицы — представление матр
 Процесс Грама-Шмидта — это метод вычисления ортогональной матрицы Q, которая состоит из ортогональных или независимых единичных векторов и занимает такое же пространство, что и матрица X.
 
 1. Выбрать вектор столбец u_1 = x_1, x1!=0
-2. Расчитать для всех столбцов u_k = x_k - sum_{j=1}^{k-1} proj(u_j, x_k)
+2. Рассчитать для всех столбцов u_k = x_k - sum_{j=1}^{k-1} proj(u_j, x_k)
 3. Для всех векторов Q_k = u_k/ norm(u_k) -- нормализация
 
 proj - считает ортогональный вектор u_k к другим методом найти такую константу чтобы u_2 = x_2 - c u_2
@@ -104,7 +104,7 @@ U - унитарная матрица;
 U*- эрмитово-сопряженная матрица;
 T - верхняя треугольная матрица с Tii = 𝜆i(A).
 Для случая вещественных чисел разложение имеет вид:
-A = V T V^⊤ ,
+A = V T Vᵀ ,
 где:
 V - ортогональная матрица.
 
@@ -170,7 +170,7 @@ R - Треугольной матрицы, содержащей собствен
 U - унитарная матрица U* = U^-1
 U*- транспонированная комплексно-сопряженная матрица 
 Если A - нормальная то AA* = A*A, то матрица R- диагональная содержит собственные значения
-Если A нормальная эрмиитова матрица то собственные значения - вещественные числа. 
+Если A нормальная эрмитова матрица то собственные значения - вещественные числа. 
 
 
 ### След матрицы
@@ -185,11 +185,11 @@ U*- транспонированная комплексно-сопряженна
 #define N 3 // параметризация
 // операции с матрицами
 void  print_m (const float *A);
-void  print_mn(float* A, unsigned m, unsigned n);
+void  print_mn(const float* A, unsigned m, unsigned n);
 void  mov_m	 (const float* a, float *r);
 void  mov_mn (const float* a, float *r, unsigned m, unsigned n);
 void  mul_m  (const float* A, const float* B, float* R);
-void  mul_mn  (const float* A, const float* B, float* R, unsigned m, unsigned n);
+void  mul_mn (const float* A, const float* B, float* R, unsigned m, unsigned n);
 void  gemv   (const float* A, const float* x, const float* b,  float* r);
 void  axpy	 (const float* A, const float* x, float* y);
 int   cmp_m  (const float* a, const float* b);
@@ -197,7 +197,7 @@ int   cmp_eps_m (const float* a, const float* b, float eps);
 int cmp_eps_mn(const float* a, const float* b, float eps, unsigned m, unsigned n);
 float det_m  (const float *lu);
 float trace_m(const float *a);
-void balance(float* A, float *D, unsigned m, unsigned n);
+void balance  (float* A, float *D, unsigned m, unsigned n);
 void unbalance(float* A, float *D, unsigned m, unsigned n);
 // восстановить A=LU, A=LDU, A=LDL^T
 void lu_comp	(const float *lu, float* r);
@@ -232,21 +232,27 @@ int  qr_decomp	  (float* a, float* r, unsigned m, unsigned n);
 void qr_block_decomp(float* a, float* r, unsigned m, unsigned n);
 int  qr_givens  (float* a, float* r, unsigned m, unsigned n);
 int  qr_house   (float* a, float* r, unsigned m, unsigned n);
-int qr_house2(float * a, float* tau, unsigned m, unsigned n);
-int qr_house_unpack(float * a, float * tau,  float * q, float * r, unsigned m,  unsigned n);
+int  qr_house2  (float* a, float* tau, unsigned m, unsigned n);
+int  qr_house_unpack(float * a, float * tau,  float * q, float * r, unsigned m,  unsigned n);
+void qr_house_bidi(float * a, float * tau, float * tav, unsigned m,  unsigned n);
+float qr_det(float* r, unsigned n);
 // разложение Шура
 // сингулярное разложение SVD
 // определение матриц
-int  is_hermitian (const float* A, int n);
-int  is_symmetric (const float* A, int n);
-int  is_skew_symmetric(const float* A, int n);
-int  is_orthogonal(const float* A, int n);
+int  is_hermitian  (const float* A, unsigned n);
+int  is_symmetric  (const float* A, unsigned n);
+int  is_skew_symmetric(const float* A, unsigned n);
+int  is_symplectic (const float* A, unsigned n);// блочная матрица 2n 2n
+int  is_hamiltonian(const float* A, unsigned n);
+int  is_orthogonal (const float* A, unsigned n);
 int  is_orthonormal(const float* A, unsigned m, unsigned n);
-int  is_normal(const float* A, unsigned n);// нормальная матрица A'A == AA'
-int  is_hessenberg(const float* A, int n);// определить матрицу Хессенберга, все нули под-диагональю
-int  is_tridiagonal(const float* A, int n);
-int  is_singular  (const float* A, int n);// может матрица сингулярная? Строки или столбцы матрицы линейно зависимы.
+int  is_normal     (const float* A, unsigned n);// нормальная матрица AᵀA == AAᵀ
+int  is_hessenberg (const float* A, unsigned n);// определить матрицу Хессенберга, все нули под-диагональю
+int  is_tridiagonal(const float* A, unsigned n);
+int  is_singular   (const float* A, unsigned n);// может матрица сингулярная? Строки или столбцы матрицы линейно зависимы.
 
+static void _set_zero(float* a, unsigned m, unsigned n, unsigned lda);
+static void _set_identity(float* a, unsigned m, unsigned n);
 /* A is Hermitian  \iff A={\overline{A}^{\mathsf{T}}}.
 
 $${\displaystyle A{\text{ is Hermitian}}\quad \iff \quad A={\overline {A^{\mathsf{T}}}}.}$$
@@ -598,7 +604,7 @@ void  print_m(const float *A)
 	\param m - число строк 
 	\param n - число столбцов
  */
-void print_mn(float* A, unsigned m, unsigned n){
+void print_mn(const float* A, unsigned m, unsigned n){
 	for(int i=0; i<m; i++){
 		for(int j=0; j<n; j++){
 			printf("\t%f,", A[i*n + j]);
@@ -1359,42 +1365,59 @@ void scal_row(float d, float* a, unsigned M, unsigned N, int k){
 	for (int j=0; j<N; ++j)
 		a[k*N+j] *= d;
 }
-
-/*! \brief определяет симметричную матрицу */
-int  is_symmetric(const float* A, int N){
-	for (int i=1; i<N; i++)
-		for (int j=0; j<i; j++){// по строке
+static
+void pow_col(float p, float* a, unsigned M, unsigned N, int k){
+	for (unsigned j=0; j<M; ++j)
+		a[j*N+k] = ldexpf(a[j*N+k], p);
+}
+static
+void pow_row(float p, float* a, unsigned M, unsigned N, int k){
+	for (unsigned j=0; j<N; ++j)
+		a[k*N+j] = ldexpf(a[k*N+j], p);
+}
+/*! \brief определяет симметричную матрицу A = Aᵀ */
+int  is_symmetric(const float* A, unsigned N){
+	unsigned i,j;
+	for (i=0; i<N-1; i++)
+		for (j=i+1; j<N; j++){// по строке
 			if (A[i*N+j]!=A[j*N+i]) return 0;
 		}
 	return 1;
 }
-/*! \brief определяет анти-симметричную матрицу */
-int  is_skew_symmetric(const float* A, int N){
-	for (int i=1; i<N; i++)
-		for (int j=0; j<i; j++){// по строке
+/*! \brief определяет анти-симметричную матрицу A =-Aᵀ */
+int  is_skew_symmetric(const float* A, unsigned N){
+	unsigned i,j;
+	for (i=0; i<N; i++)
+		for (j=i; j<N; j++){// по строке
 			if (A[i*N+j]!=-A[j*N+i]) return 0;
 		}
 	return 1;
 }
-/*! \brief определяет эрмитову матрицу - комплексно сопряженная транспонированная */
-int  is_hermitian(const float* A, int N){
-	for (int i=1; i<N; i++)
-		for (int j=0; j<i; j++){// по строке
-			if (/*conj*/(A[i*N+j])!=A[j*N+i]) return 0;
+/*! \brief определяет эрмитову матрицу - комплексно сопряженная транспонированная 
+	доделать
+ */
+int  is_hermitian(const float* A, unsigned N){
+	unsigned i,j, lda = N+N;
+	for (i=0; i<N; i+=1)
+		for (j=i; j<i; j+=1){// по строке
+			if (/*conj*/A[i*lda+j]!=A[j*lda+i] || A[i*lda+j+1]!=-A[j*lda+i+1]) return 0;
 		}
+	return 1;
+}
+int  is_unitary(const float* A, unsigned N){
 	return 1;
 }
 /*! \brief определяет ортогональную матрицу 
 
-A square matrix Q is called an orthogonal matrix if it satisfies Q^T Q = I.
-
-
+квадратная матрица Q называется ортогональной, если QᵀQ = I. 
+квадратная матрица U называется унитарной, если UᴴU=I
  */
-int is_orthogonal(const float* A, int N){
+int is_orthogonal(const float* A, unsigned N){
 	const float eps = N*__FLT_EPSILON__;
-	const int M = N;
-	for (int j=0; j<N; j++)
-	for (int i=0; i<N; i++){
+	const unsigned int M = N;
+	unsigned i,j;
+	for (j=0; j<N; j++)
+	for (i=0; i<N; i++){
 		float s = dot_col(A, M, N, i,j);// dot product column vectors
 //		float r = dot_row(A, M, N, i,j);// dot product row vectors
 //		if(fabsf(r-s)>=eps) return 0;
@@ -1402,10 +1425,58 @@ int is_orthogonal(const float* A, int N){
 			//printf("i,j=%d,%d\n", i,j);
 			return 0;
 		}
-		if(i==j && fabsf(s-1.0f)>=eps) {
+		if(i==j && fabsf(s-1.0f)>=eps) {// нормированные столбцы
 			//printf("i,j=%d,%d %1.8f\n", i,j, s);
 			return 0;
 		}
+	}
+	return 1;
+}
+/*! \brief определяет ортогональную симплектическую структуру матрицы
+
+Матрица A размером 2N×2N состоит из блоков симметричных и антисимметричных матриц N×N
+[V U; -U V]
+
+ */
+int is_symplectic (const float* A, unsigned N){
+ 	unsigned lda = N+N;
+	unsigned i, j;
+	const float *a,*b;
+	a = A+N; b = A+N*lda;// анти-диагональные блоки
+	for (i=0; i<N; ++i)
+	for (j=0; j<N; ++j)
+		if(a[i*lda+j] != -b[i*lda+j]) return 0;
+	a = A; b = A+N*lda+N;// диагональные блоки
+	for (i=0; i<N; ++i)
+	for (j=0; j<N; ++j)
+		if(a[i*lda+j] != b[i*lda+j]) return 0;
+	return 1;
+}
+/*! \brief определяет гамильтонову структуру блочной матрицы H = [A B; C D]
+	1. анти-диагональные блоки симметричны C=Cᵀ, B=Bᵀ
+	2. диагональные блоки A + Dᵀ = 0
+ */
+int is_hamiltonian (const float* H, unsigned N){
+	unsigned lda = N+N;
+	unsigned i, j;
+	const float *a, *b;
+	a = H+N; b = H+N*lda;// анти-диагональные блоки
+	for (i=0; i<N-1; ++i)
+	for (j=i+1; j<N; ++j) {// симметричны A=Aᵀ, B=Bᵀ
+		if(a[j*lda+i] != a[i*lda+j]) return 0;
+		if(b[j*lda+i] != b[i*lda+j]) return 0;
+	}
+	a = H; b = H+N*lda+N;// диагональные блоки A + Bᵀ = 0
+	for (i=0; i<N; ++i)
+	for (j=0; j<N; ++j)
+		if(a[j*lda+i] + b[i*lda+j] != 0) return 0;
+	return 1;
+}
+int is_equal(const float* A, const float* B, unsigned M, unsigned N, unsigned lda){
+	unsigned i, j;
+	for (i=0; i<M; ++i)
+	for (j=0; j<N; ++j){
+		if(A[i*lda+j] != B[i*lda+j]) return 0;
 	}
 	return 1;
 }
@@ -1421,7 +1492,7 @@ int is_orthonormal(const float* A, unsigned M, unsigned N){
 	return 1;
 }
 /*! 
-	матрица нормальаня, если выполнено условие Aᵀ·A = A·Aᵀ. 
+	матрица нормальная, если выполнено условие Aᵀ·A = A·Aᵀ. 
 	Для комплексных матриц Aᴴ·A = A·Aᴴ.
  */
 int is_normal(const float* A, unsigned N){
@@ -1514,7 +1585,7 @@ float givens(float a, float b, float*c, float*s){
 Я немного доработал алгоритм, поменял знак синуса и цикл стал не от нуля
 */
 static 
-void givens_left (float* a, float* r, unsigned  N, unsigned i, unsigned k, float c, float s, float v){
+void givens_left (float* a, unsigned  N, unsigned i, unsigned k, float c, float s, float v){
 	a[i*N+i] = v;
 	a[k*N+i] = 0;
 	for (unsigned j=i+1; j < N; ++j){// цикл по строке
@@ -1539,14 +1610,21 @@ void givens_right(float* a, unsigned N, unsigned i, unsigned k, float c, float s
 /*! Получение QR разложения методом вращения Гивенса 
 доделать Q = 
  */
-int qr_givens(float* a, float* r, unsigned M, unsigned N)
+int qr_givens(float* a, float* q, unsigned M, unsigned N)
 {
+	unsigned i,j;
 	float c,s;
-	for (int i=1; i < M; ++i){// номер строки
-		for (int j=0; j < i; ++j){// номер столбца x
+	if(q!=0){
+		_set_identity(q, N,N);
+	}
+	for (i=1; i < M; ++i){// номер строки
+		for (j=0; j < i; ++j){// номер столбца x
 			//if (a[i*N+j]==0) continue;
 			float v = givens(a[j*N+j], a[i*N+j], &c,&s);
-			givens_left(a, r, N, j, i, c, s, v);
+			givens_left(a, N, j, i, c, s, v);
+			if (q!=NULL) {
+				givens_right(q, N, j, i, c, s, v);
+			}
 			printf("[%d;%d]\n", i,j);
 			print_mn(a, M, N);
 		}
@@ -1554,29 +1632,33 @@ int qr_givens(float* a, float* r, unsigned M, unsigned N)
 	return 0;
 }
 
-typedef float Ftype;
+typedef float  Ftype;
 typedef struct _vector vector_t;
 typedef struct _matrix matrix_t;
 struct _vector {
-	unsigned N;
+	unsigned N;		//!< число элементов
 	unsigned stride;
 	Ftype * data;
 };
 struct _matrix {
-	unsigned M,N;
-	unsigned lda;
-	Ftype * data;
+	unsigned M,N;	//!< размер матрицы M-строк, N - столбцов
+	unsigned lda;	//!< размер строки матрицы с учетом выравнивания
+	Ftype * data;	//!< данные
+};
+struct _tensor {
+	unsigned typ;	//!< тип матрицы, HE, SY, TR, ...; формат упаковки Q8_0 Q8_1 F16, BF16, F32... квантизация
+	unsigned M,N;	//!< размер матрицы M-строк, N - столбцов
+	unsigned lda;	//!< размер строки матрицы с учетом выравнивания
+	Ftype * data;	//!< данные
 };
 static inline
 matrix_t _submatrix(Ftype* a, unsigned i, unsigned j, unsigned M, unsigned N, unsigned lda){
-	matrix_t m = {.lda = lda, .M = M, .N = N, .data = a + i*lda + j};
-	return m;
+	return (matrix_t){.lda = lda, .M = M, .N = N, .data = a + i*lda + j};
 }
 /*! класс вектор - это то что выделено из матрицы (подстрока или колонка)*/
 static inline
 vector_t _subrow(Ftype* a, unsigned i, unsigned j, unsigned size, unsigned N){
-	vector_t v = {.data = a+i*N+j, .N = size, .stride = 1};
-	return v;
+	return (vector_t){.data = a+i*N+j, .N = size, .stride = 1};
 }
 static inline
 vector_t _subcolumn(Ftype* a, unsigned i, unsigned j, unsigned size, unsigned N){
@@ -1592,8 +1674,7 @@ vector_t _diag(Ftype* a, unsigned i, unsigned j, unsigned size, unsigned N){
 
 static inline
 vector_t _subvector(Ftype* x, unsigned i, unsigned size, unsigned N){
-	vector_t v = {.data = x+i*N+0, .N = size, .stride = N};
-	return v;
+	return (vector_t){.data = x+i*N+0, .N = size, .stride = N};
 }
 static inline
 void  _vector_set(vector_t *v, unsigned i, Ftype value){
@@ -1610,22 +1691,23 @@ Ftype _vector_exchange(vector_t *v, unsigned i, Ftype value){
 	*r = value;
 	return vi;
 }
-static inline
+static
 void _set_zero(Ftype* a, unsigned M, unsigned N, unsigned lda){
 	unsigned i, j;
 	for (i=0; i<M; i++)
 	for (j=0; j<N; j++)
 		a[i*lda+j] = 0;
 }
+static
 void _set_identity(Ftype* a, unsigned M, unsigned N){
 	for (unsigned i=0; i<M; ++i)
 	for (unsigned j=0; j<N; ++j)
 		a[i*N+j] = 0;
-	if (N>M) N = M;
-	for (unsigned i=0; i<N; ++i)
+	if (M>N) M = N;
+	for (unsigned i=0; i<M; ++i)
 		a[i*N+i] = 1;
 }
-
+// Методы BLAS по шаблону для класса Ftype
 #define BLAS(n) cblas_##n
 #define CblasNoTrans 0
 #define CblasTrans 	 1
@@ -1688,7 +1770,7 @@ Ftype*A, int lda, unsigned M, unsigned N, int Trans)
 		for (unsigned i=0; i< lenY; i++) Y[i*dy]*= beta;
 	}
 	if (alpha==0.0) return;
-  if (Trans == CblasTrans){ /* form  y := alpha*A'*x + y */
+  if (Trans == CblasTrans){ /* form  y := alpha*Aᵀ*x + y */
     for (unsigned j = 0; j < lenX; j++) {
       const Ftype temp = alpha * X[j*dx];
       if (temp != 0.0) {
@@ -1859,8 +1941,6 @@ int qr_block(matrix_t* a, matrix_t* r)
 	const unsigned M = a->M;
 	const unsigned N = a->N;
 	
-//	ASSERT(N==r->sz[0]);
-//	ASSERT(N==r->sz[1]);
 	const unsigned N1 = N/2;// SPLIT(N)
 	if (N1<Nb) // порог перехода к линейному алгоритму
 		return qr_mgs_decomp(a->data, r->data, M, N, a->lda);
@@ -1888,11 +1968,13 @@ void qr_block_decomp(float* a, float* r, unsigned M, unsigned N){
 	qr_block(&A, &R);
 }
 #endif
-/*! 
+/*! \brief Би-диагонализация
 	\param tau - вектор размер N
 	\param tav - вектор размер M
+	\param M - число строк матрицы a
+	\param N - число столбцов матрицы a
  */
-int qr_house_bidi(Ftype * a, Ftype * tau, Ftype * tav, unsigned M,  unsigned N)
+void qr_house_bidi(Ftype * a, Ftype * tau, Ftype * tav, unsigned M,  unsigned N)
 {
 	const unsigned lda = N;
 	for (unsigned j=0; j< N; ++j){
@@ -1939,7 +2021,16 @@ int qr_house_unpack(Ftype * a, Ftype * tau,  Ftype * q, Ftype * r, unsigned M,  
 		}
 	}
 }
+/*! \brief вычисление детерминанта после QR разложения. 
 
+det(A)=det(Q)det(R), det(Q)=1 
+ */
+float qr_det(float* r, unsigned N){
+	float d = r[0];
+	for (unsigned i=1; i<N; i++, r+=N+1)
+		d *= *r;
+	return d;
+}
 /*! \brief решение системы уравнений Ax=b методом QR 
 	\param a матрица M x N заменяется на R, верхнюю треугольную
 	\param x вектор размером M должен содержать на входе `b`, на выходе `x`
@@ -2168,9 +2259,49 @@ void balance2(Ftype* A, Ftype *D, unsigned M, unsigned N){
 				D[i] = ldexpf(D[i],p);
 				Ftype f = ldexpf(1.0f,p);
 				//printf("f=%f\n", f);
-				scal_row(1/f, A, M,N, i);
-				scal_col(  f, A, M,N, i);
+				pow_row(-p, A, M,N, i);
+				pow_col( p, A, M,N, i);
 			}
 		}
 	} 
+}
+/*! \brief Algorithm 5.2.5 (Hessenberg QR) 
+	\param H - матрица Хессенберга, с ненулевыми элементами под диагональю
+ */
+void Hessenberg_qr(Ftype* H, unsigned N){
+	unsigned k;
+	float c[N-1],s[N-1],v[N-1];
+	for(k=0; k< N-1;++k){
+		v[k] = givens(H[k*N+k], H[(k+1)*N+k], &c[k], &s[k]);
+		givens_left(H, N, k, k+1, c[k],s[k],v[k]);
+	}
+}
+/*! \brief Algorithm 7.4.1 (Hessenberg QR Step)
+
+If H is an n-by-n upper Hessenberg matrix, then this algorithm
+overwrites H with H+ = RQ where H = QR is the QR factorization of H
+*/
+void Hessenberg_qr_step(Ftype* H, unsigned N){
+	unsigned k;
+	float c[N-1],s[N-1],v[N-1];
+	for(k=0; k< N-1;++k){//Algorithm 5.2.5 (Hessenberg QR) 
+		v[k] = givens(H[k*N+k], H[(k+1)*N+k], &c[k], &s[k]);
+		givens_left(H, N, k, k+1, c[k],s[k],v[k]);
+	}
+	for(k=0; k< N-1;++k){
+		givens_right(H, N, k, k+1, c[k],s[k],v[k]);
+	}
+}
+/*! \brief Algorithm 7.4.2 (Householder Reduction to Hessenberg Form)
+ */
+void Hessenberg_reduction(Ftype* H, unsigned N){
+	unsigned k, lda = N;
+	for (k=0; k<N-2;++k){
+		vector_t v = _subcolumn(H, k+1, k, N-(k+1), lda);
+		Ftype b = house(H+(k+1)*lda+k, N-(k+1), lda);
+		matrix_t m = _submatrix(H, k+1, k, N-(k+1), N-k, lda);
+		house_hm(b, &v, &m);
+		matrix_t h = _submatrix(H, 0, k+1, N, N-(k+1), lda);
+		house_mh(b, &v, &h);
+	}
 }
