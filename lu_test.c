@@ -235,6 +235,7 @@ int  qr_house   (float* a, float* r, unsigned m, unsigned n);
 int  qr_house2  (float* a, float* tau, unsigned m, unsigned n);
 int  qr_house_unpack(float * a, float * tau,  float * q, float * r, unsigned m,  unsigned n);
 void qr_house_bidi(float * a, float * tau, float * tav, unsigned m,  unsigned n);
+void qr_house_bidi_unpack(float * a, float * tau, float * tav, float * U, float * V, unsigned m,  unsigned n);
 float qr_det(float* r, unsigned n);
 // разложение Шура
 // сингулярное разложение SVD
@@ -525,6 +526,7 @@ printf("\n");
 		0.14, 0.30, 0.97, 0.66,
 		0.51, 0.13, 0.19, 0.85 }; 
 	float tau4[4];
+	float tav4[4];
 	float B4[4*4];
 	float Q4[4*4];
 	float R4[4*4];
@@ -585,6 +587,61 @@ ans =
 	printf("\nA=\n");
 	print_mn(A4, 4, 4);
 
+	printf("QR Householder Bidiagonalization\n");
+
+	float A45[] = {
+		4, 3, 0, 2, 5,
+		2, 1, 2, 1, 6,
+		4, 4, 0, 3, 0,
+		5, 6, 1, 3, 7};
+//	mov_mn(B4, Q4, 4, 4);
+	qr_house_bidi(A45, tau4, tav4, 4,5);
+//	print_mn(Q4, 4, 4);
+	float A10[] = {// 10 x 5
+	0.8594598509, 0.8886035203, 0.8149294811, 0.7431045200, 0.8032585254,
+	0.0587533356, 0.7245921139, 0.5380305406, 0.7342256338, 0.6982547215,
+	0.7176400044, 0.0539911194, 0.3670289037, 0.9701228316, 0.8404100032,
+	0.4112932913, 0.3075223914, 0.5798244230, 0.0015286701, 0.7890766996,
+	0.9781337455, 0.2921431712, 0.0432923459, 0.9428416709, 0.9646959945,
+	0.0354323143, 0.4898468039, 0.4513681016, 0.2107982126, 0.4445287671,
+	0.8115565467, 0.7058405790, 0.5527189195, 0.5410537042, 0.9117912347,
+	0.1149175267, 0.8406228190, 0.6040554044, 0.4260203703, 0.2376075180,
+	0.2164094832, 0.1800869710, 0.7479251262, 0.0009715103, 0.8810979640,
+	0.8647838791, 0.5856765260, 0.0127644690, 0.5744975219, 0.1985024847};
+	printf("QR Bidi A10\n");
+	float B10[10*5];
+	float Q10[10*5];
+	float R10[5*5];
+	float M10[10*5];
+	float tau10[10];
+	float tav5[5];
+	mov_mn(A10, B10, 10, 5);
+#if 0
+	qr_decomp(A10, R10, 10, 5);
+	print_mn(A10, 6, 5);
+	print_mn(R10, 5, 5);
+	mul_mn(A10,R10, M10, 10, 5);
+	print_mn(M10, 6, 5);
+	if(cmp_eps_mn(M10,B10, eps, 10,5)) printf("..ok\n");
+#elif 1
+	qr_house(A10, tau10, 10, 5);
+	qr_house_unpack(A10, tau10, Q10, R10, 10, 5);
+	mul_mn(Q10,R10, M10, 10, 5);
+	print_mn(M10, 6, 5);
+	print_mn(R10, 5, 5);
+	if(cmp_eps_mn(M10,B10, 2*eps, 10, 5)) printf("..ok\n");
+#else
+	qr_house_bidi(A10, tau10, tav5, 10,5);
+	print_mn(A10, 6, 5);
+#endif
+
+/* Результат QR разложения должен быть:
+2.288      1.517      1.607      1.892      1.183      
+0          1.105      0.7235     0.07972    0.07877    
+0          0          0.6674     0.299      -0.4158    
+0          0          0          0.4826     0.6031     
+0          0          0          0          0.9661 
+*/
 	return 0;
 }
 /*! \brief вывод на экран печать матриц NxN
@@ -1831,6 +1888,28 @@ void house_hm  (Ftype beta, vector_t* v, matrix_t* A){
 	}
 }
 static
+void house_hm1 (Ftype beta, vector_t* v, matrix_t* A){
+	unsigned i, j, M = A->M, N = A->N, lda = A->lda;
+	if (beta==0.0f) {
+		A->data[0] = 1;
+		for (j=1; j<N; ++j) A->data[0*lda+j] = 0;
+		for (i=1; i<M; ++i) A->data[i*lda+0] = 0;
+		return;
+	}
+	for (j = 0; j < N; j++){
+		Ftype w = 0;//A->data[0*lda+j];
+		for (i=1; i<M; i++) // sdot
+			w = fmaf(A->data[i*lda+j],v->data[v->stride*i],w);
+		w *= -beta;
+		A->data[0*lda+j] = w;
+		for (i=1; i<M; i++) /* Aij = Aij - tau vi wj */
+			A->data[i*lda+j] = fmaf(w,v->data[v->stride*i], A->data[i*lda+j]);
+	}
+	A->data[0*lda+0] = 1-beta;
+	for (i=1; i<M; i++)
+		A->data[i*lda+0] *= -beta;
+}
+static
 void house_left(Ftype beta, vector_t* v, matrix_t* A,  vector_t* w){
 
 	if (beta==0.0f) return;
@@ -1863,7 +1942,7 @@ void house_right(Ftype beta, vector_t* v, matrix_t* A,  vector_t* w){
 	Ftype v0 = v->data[0]; v->data[0] = 1.0f;
 	BLAS(gemv)(0.0f, w->data, w->stride, 1.0f, v->data, v->stride, 
 	A->data, A->lda, A->M, A->N, CblasNoTrans);// w = A^T v
-	BLAS(ger) (-beta, w->data, w->stride, v->data, v->stride, A->data, A->lda, A->M, A->N); 
+	BLAS(ger) (-beta, v->data, v->stride, w->data, w->stride, A->data, A->lda, A->M, A->N); 
 	//A = A - beta v (v^T A) = A - beta v (A^T v)^T
 	v->data[0] = v0;
 }
@@ -1968,6 +2047,29 @@ void qr_block_decomp(float* a, float* r, unsigned M, unsigned N){
 	qr_block(&A, &R);
 }
 #endif
+/*! \brief Восстановить матрицу Q и R из компактной записи QR разложения, 
+полученной методом вращений Хаусхолдера 
+	\param r - матрица R может быть NULL
+*/
+int qr_house_unpack(Ftype * a, Ftype * tau,  Ftype * q, Ftype * r, unsigned M,  unsigned N){
+	unsigned i,j,k;
+	unsigned lda = N;
+	_set_identity(q, M, N);
+	for (j=N; j-- >0;){
+		vector_t v = _subcolumn(a, j, j, M-j, lda);
+		matrix_t m = _submatrix(q, j, j, M-j, N-j, lda);
+		house_hm(tau[j], &v, &m);
+	}
+	if (r!=NULL){
+		for (i=0; i<N; ++i){
+			for (j = 0; j < i && j < N; j++)
+				r[i*N+j] = 0;
+			for (j = i; j < N; j++)
+				r[i*N+j] = a[i*lda+j];
+		}
+	}
+}
+
 /*! \brief Би-диагонализация
 	\param tau - вектор размер N
 	\param tav - вектор размер M
@@ -1984,50 +2086,74 @@ void qr_house_bidi(Ftype * a, Ftype * tau, Ftype * tav, unsigned M,  unsigned N)
 		if (j+1<N){		
 			vector_t w = _subvector(tau,  j, N-(j+1), 1);
 			matrix_t m = _submatrix(a, j, j+1, M-j, N-(j+1), lda);
+			//float v0 = _vector_exchange(&v, 0, 1.0f);
 			house_left(tau_j, &v, &m, &w);
+			//_vector_set(&v, 0, v0);
 		}
 
 		if (j+1<N){
 			vector_t v = _subrow(a, j,  j+1, N-j-1, lda);
 			Ftype tau_j = house(a+lda*j+j+1, N-j-1, 1);
-			tav[j] = tau_j;
 			if (j+1<M) {
 				vector_t w = _subvector(tav,  j+1, M-(j+1), 1);
 				matrix_t m = _submatrix(a, j+1, j+1, M-(j+1), N-(j+1), lda);
 				house_right(tau_j, &v, &m, &w);
 			}
+			tav[j] = tau_j;
 		}
+		print_mn(a, M, N);
 	}
 }
-/*! \brief Восстановить матрицу Q и R из компактной записи QR разложения, 
-полученной методом вращений Хаусхолдера 
-	\param r - матрица R может быть NULL
-*/
-int qr_house_unpack(Ftype * a, Ftype * tau,  Ftype * q, Ftype * r, unsigned M,  unsigned N){
+/*! \brief Би-диагонализация
+	\param a - на входе результат разложения UBV^T. На выходе матрица U (MxN)
+	\param tau - вектор размер N, туда помещается диагональ B (N)
+	\param tav - вектор размер N, туда копируются элемента над диагональю B (N-1)
+	\param V - матрица NxN 
+	\param M - число строк матрицы a
+	\param N - число столбцов матрицы a
+ */
+void qr_house_bidi_unpack(Ftype * a, Ftype * tau, Ftype * tav, Ftype * U, Ftype * V, unsigned M,  unsigned N)
+{
 	unsigned i,j,k;
 	unsigned lda = N;
-	_set_identity(q, M, N);
-	for (j=N; j-- >0;){
-		vector_t v = _subcolumn(a, j, j, M-j, lda);
-		matrix_t m = _submatrix(q, j, j, M-j, N-j, lda);
-		house_hm(tau[j], &v, &m);
+	if (V!=NULL) {
+		_set_identity(V, N, N);
+		for (j=N-1; j-- >0;){
+			vector_t v = _subrow   (a, j,   j+1, N-(j+1), lda);
+			matrix_t m = _submatrix(V, j+1, j+1, N-(j+1), N-(j+1), lda);
+			house_hm(tav[j], &v, &m);
+		}
 	}
-	if (r!=NULL){
-		for (i=0; i<M; ++i){
-			for (j = 0; j < i && j < N; j++)
-				r[i*N+j] = 0;
-			for (j = i; j < N; j++)
-				r[i*N+j] = a[i*lda+j];
+	/* Копировать наддиагональные элементы в tav */
+	for (j = 0; j < N - 1; j++)
+		tav[j] = a[j*lda+j+1];
+	// if U != A
+	if (U==a || U==NULL){
+		for (j=N; j-- >0;){
+			vector_t v = _subcolumn(a, j, j, M-j, lda);
+			matrix_t m = _submatrix(a, j, j, M-j, N-j, lda);
+			Ftype beta = tau[j];
+			tau[j] = a[j*lda+j];// копировать диагональные элементы
+			house_hm1(beta, &v, &m);
+		}
+	} else {
+		_set_identity(U, M, N);
+		for (j=N; j-- >0;){
+			vector_t v = _subcolumn(a, j, j, M-j, lda);
+			matrix_t m = _submatrix(U, j, j, M-j, N-j, lda);
+			Ftype beta = tau[j];
+			tau[j] = a[j*lda+j];// копировать диагональные элементы
+			house_hm(beta, &v, &m);
 		}
 	}
 }
 /*! \brief вычисление детерминанта после QR разложения. 
 
-det(A)=det(Q)det(R), det(Q)=1 
+det(A)=det(Q)det(R) = prod R_{ii}, det(Q)=1 
  */
 float qr_det(float* r, unsigned N){
-	float d = r[0];
-	for (unsigned i=1; i<N; i++, r+=N+1)
+	float d = 1;
+	for (unsigned i=0; i<N; i++, r+=N+1)
 		d *= *r;
 	return d;
 }
