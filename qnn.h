@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <math.h>
+#include "quarks.h"
 // Это определение надо расширить на случай библиотеки
 #define GGML_API extern
 // Проверки для отладки моделей
@@ -85,6 +86,9 @@ enum ggml_type {
         GGML_TYPE_F64     = 28,
         GGML_TYPE_IQ1_M   = 29,
         GGML_TYPE_BF16    = 30,
+        GGML_TYPE_BF8     = 31,// E5M2 -- AG добавил в QNN
+        GGML_TYPE_HF8     = 32,
+        GGML_TYPE_E4M3FN  = 33,
         // GGML_TYPE_Q4_0_4_4 = 31, support has been removed from gguf files
         // GGML_TYPE_Q4_0_4_8 = 32,
         // GGML_TYPE_Q4_0_8_8 = 33,
@@ -106,12 +110,12 @@ typedef struct { uint8_t  bits; } ggml_fp8_t;// E4M3FN
 typedef struct { uint8_t  bits; } ggml_bf8_t;// E5M2
 typedef _Float16 ggml_half;
 #define QK8_0 32
-typedef struct {
+typedef struct _block_q8_0 {
     ggml_half d;       // delta
     int8_t  qs[QK8_0]; // quants
 } block_q8_0;
 #define QK4_0 32
-typedef struct {
+typedef struct _block_q4_0 {
     ggml_half d;           // delta
     uint8_t qs[QK4_0 / 2]; // nibbles / quants
 } block_q4_0;
@@ -122,7 +126,7 @@ typedef struct {
 // 8 blocks of 32 elements each
 // weight is represented as x = a * q + b
 // Effectively 4.5 bits per weight
-typedef struct {
+typedef struct _block_q4_K {
     struct {
 		ggml_half d;    // super-block scale for quantized scales
 		ggml_half dmin; // super-block scale for quantized mins
@@ -134,7 +138,7 @@ typedef struct {
 // 8 blocks of 32 elements each
 // weight is represented as x = a * q + b
 // Effectively 5.5 bits per weight
-typedef struct {
+typedef struct _block_q5_K {
 	struct {
 		ggml_half d;    // super-block scale for quantized scales
 		ggml_half dmin; // super-block scale for quantized mins
@@ -147,7 +151,7 @@ typedef struct {
 // weight is represented as x = a * q
 // 16 blocks of 16 elements each
 // Effectively 6.5625 bits per weight
-typedef struct {
+typedef struct _block_q6_K {
     uint8_t ql[QK_K/2];      // quants, lower 4 bits
     uint8_t qh[QK_K/4];      // quants, upper 2 bits
     int8_t  scales[QK_K/16]; // scales, quantized with 8 bits
@@ -156,7 +160,7 @@ typedef struct {
 //static_assert(sizeof(block_q5_K) == 2*sizeof(ggml_half) + K_SCALE_SIZE + QK_K/2 + QK_K/8, "wrong q5_K block size/padding");
 // This is only used for intermediate quantization and dot products
 #define Q8K_K 32
-typedef struct {
+typedef struct _block_q8_K {
     float   d;              // delta
 	int8_t  ex;
     int16_t  qs[Q8K_K];       // quants
@@ -172,7 +176,7 @@ static inline size_t gguf_type_size(enum gguf_type type) {
     return GGUF_TYPE_SIZE[type];
 }
 #if defined(__F16C__)
-#include <intrin.h>
+#include <x86intrin.h>
 	#define GGML_FP16_TO_FP32(x) _cvtsh_ss(*(uint16_t*)&(x))
 /*
     (_MM_FROUND_TO_NEAREST_INT |_MM_FROUND_NO_EXC) // round to nearest, and suppress exceptions
@@ -558,8 +562,8 @@ enum ggml_tensor_flag {
     GGML_TENSOR_FLAG_SHARED,
     GGML_TENSOR_FLAG_CACHE,
 };
-    // available tensor operations:
-    enum ggml_op {
+// available tensor operations:
+enum ggml_op {
         GGML_OP_NONE = 0,
 
         GGML_OP_DUP,
@@ -591,7 +595,7 @@ enum ggml_tensor_flag {
 
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
-        GGML_OP_OUT_PROD,
+        GGML_OP_OUT_PROD,   //!< outer product
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -606,17 +610,17 @@ enum ggml_tensor_flag {
         GGML_OP_DIAG,
         GGML_OP_DIAG_MASK_INF,
         GGML_OP_DIAG_MASK_ZERO,
-        GGML_OP_SOFT_MAX,
+        GGML_OP_SOFT_MAX,   //!< Softmax
         GGML_OP_SOFT_MAX_BACK,
-        GGML_OP_ROPE,
+        GGML_OP_ROPE,   //!< 
         GGML_OP_ROPE_BACK,
         GGML_OP_CLAMP,
         GGML_OP_CONV_TRANSPOSE_1D,
-        GGML_OP_IM2COL,
+        GGML_OP_IM2COL,     //!< 
         GGML_OP_IM2COL_BACK,
         GGML_OP_CONV_TRANSPOSE_2D,
         GGML_OP_POOL_1D,
-        GGML_OP_POOL_2D,
+        GGML_OP_POOL_2D,    //!< 2D pooling
         GGML_OP_POOL_2D_BACK,
         GGML_OP_UPSCALE, // nearest interpolate
         GGML_OP_PAD,
@@ -626,7 +630,7 @@ enum ggml_tensor_flag {
         GGML_OP_ARGSORT,
         GGML_OP_LEAKY_RELU,
 
-        GGML_OP_FLASH_ATTN_EXT,
+        GGML_OP_FLASH_ATTN_EXT, //!< Flash attention
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
         GGML_OP_SSM_SCAN,
@@ -634,9 +638,9 @@ enum ggml_tensor_flag {
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
-        GGML_OP_RWKV_WKV6,
-        GGML_OP_GATED_LINEAR_ATTN,
-        GGML_OP_RWKV_WKV7,
+        GGML_OP_RWKV_WKV6,  // 
+        GGML_OP_GATED_LINEAR_ATTN,  // 
+        GGML_OP_RWKV_WKV7,  // 
 
         GGML_OP_UNARY,
 
@@ -658,62 +662,93 @@ enum ggml_tensor_flag {
         GGML_OP_COUNT,
     };
 
-    enum ggml_unary_op {
-        GGML_UNARY_OP_ABS,
-        GGML_UNARY_OP_SGN,
-        GGML_UNARY_OP_NEG,
-        GGML_UNARY_OP_STEP,
-        GGML_UNARY_OP_TANH,
-        GGML_UNARY_OP_ELU,
-        GGML_UNARY_OP_RELU,
-        GGML_UNARY_OP_SIGMOID,
-        GGML_UNARY_OP_GELU,
-        GGML_UNARY_OP_GELU_QUICK,
-        GGML_UNARY_OP_SILU,
-        GGML_UNARY_OP_HARDSWISH,
-        GGML_UNARY_OP_HARDSIGMOID,
-        GGML_UNARY_OP_EXP,
+enum ggml_unary_op {// unary operations
+    GGML_UNARY_OP_ABS,
+    GGML_UNARY_OP_SGN,
+    GGML_UNARY_OP_NEG,
+    GGML_UNARY_OP_STEP,
+    GGML_UNARY_OP_TANH,
+    GGML_UNARY_OP_ELU,
+    GGML_UNARY_OP_RELU,
+    GGML_UNARY_OP_SIGMOID,
+    GGML_UNARY_OP_GELU,
+    GGML_UNARY_OP_GELU_QUICK,
+    GGML_UNARY_OP_SILU,
+    GGML_UNARY_OP_HARDSWISH,
+    GGML_UNARY_OP_HARDSIGMOID,
+    GGML_UNARY_OP_EXP,
 
-        GGML_UNARY_OP_COUNT,
-    };
+    GGML_UNARY_OP_COUNT,
+};
 
-// Тензоры и операции над тензорами
-// n-dimensional tensor
+//!< Тензоры и операции над тензорами
+//!< n-dimensional tensor
+typedef struct ggml_tensor tensor_t;
+typedef struct _weight_tensor tensor_weight_t;
+struct _weight_tensor {
+    uint64_t sdnv;      //!< Self-Delimiting Variable-Length Integer, local object identifier, OID = {type, cname, idx, suffix|op } имя восстанавливается по хеш таблице quarks
+    enum ggml_type type;//!< tensor  type: F32, F16, BF16, HF8, BF8, quantized: Q4_0, ... Q8_0, Q4_K, ... Q8_K, ...
+    enum ggml_op   op;  //!< содержит размерность тензора n_dim при загрузке из файла GGUF, OP_NONE
+    size_t ne[GGML_MAX_DIMS];   // number of elements ne[i]==1 для i>=n_dim
+    uint64_t offset;    //!< смещение в байтах от начала файла
+    void*    data;      //!< указатель на данные в памяти
+    size_t   size;      //!< размер в байтах
+};
+
 struct ggml_tensor {
-    enum ggml_type type;
-
-//    struct ggml_backend_buffer * buffer;
-
-    size_t ne[GGML_MAX_DIMS]; // number of elements
-    size_t nb[GGML_MAX_DIMS]; // stride in bytes:
+    uint64_t sdnv;      //!< Self-Delimiting Variable-Length Integer, local object identifier, OID = {type, sdnv}
+    enum ggml_type type;//!< tensor  type: F32, F16, BF16, HF8, BF8, quantized: Q4_0, ... Q8_0, Q4_K, ... Q8_K, ...
+    enum ggml_op op;    //!< compute opcode: mul, add, mul_mat, norm, softmax, ...
+    size_t ne[GGML_MAX_DIMS];   // number of elements
+    size_t nb[GGML_MAX_DIMS];   // stride in bytes:
                                 // nb[0] = ggml_type_size(type)
                                 // nb[1] = nb[0]   * (ne[0] / ggml_blck_size(type)) + padding
                                 // nb[i] = nb[i-1] * ne[i-1]
-
-    // compute data
-    enum ggml_op op;
-
-    // op params - allocated as int32_t for alignment
-    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
-
-    int32_t flags;
-
-    struct ggml_tensor * src[GGML_MAX_SRC];
+    int32_t flags;      //!< GGML_TENSOR_FLAG_INPUT, GGML_TENSOR_FLAG_OUTPUT, GGML_TENSOR_FLAG_CONST ...
+    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];// op params - allocated as int32_t for alignment
+    struct ggml_tensor * src[GGML_MAX_SRC];//!< source tensors
 
     // source tensor and offset for views
-    struct ggml_tensor * view_src;
-    size_t               view_offs;
 
     void * data;
 
-    const char* name; // ссылка на tensor_info или на dynsym
-
-    void * extra; // extra things e.g. for ggml-cuda.cu
+    // const char* name; //!< tensor name, reference to dynsym (\see quarks dynsym)
+    // ссылка на tensor_info или на dynsym
 
 //        char padding[8];
 };
-static inline void ggml_set_name (struct ggml_tensor  * a, const char* name){
-    a->name = name;
+struct ggml_context {
+    size_t mem_size;    //!< total memory size
+    size_t mem_offs;    //!< offset of the next object
+    void * mem_buffer;  //!< pointer to the beginning of the memory buffer
+    int    n_objects;   //!< number of objects in the memory buffer
+    QTable_t* quarks;   //!< hesh table, хранит имена тензоров
+};
+
+/*! \brief кодирование элемента SDNV 
+	\param sdnv - указатель на начало SDNV
+	\param value - значение 0..2^32-1
+	\return указатель на конец SDNV
+ */
+static inline uint8_t *  _sdnv_encode(uint8_t* sdnv, uint32_t value){
+	do {
+		uint8_t data = value & 0x7F;
+		value>>=7;
+		*sdnv++ = value? data|0x80: data;
+	} while (value);
+	return sdnv;
+}
+/*! \brief сохранение имени тензора в хеш таблицу и назначение SDNV идентификатора
+    \param ctx - указатель на контекст
+    \param a   - указатель на тензор
+    \param cname - имя тензора, должно быть уникальным
+ */
+static inline void ggml_set_name (struct ggml_context *ctx, struct ggml_tensor  * a, const char* cname){
+    uint32_t id = _quark_insert(ctx->quarks, cname); // добавить в таблицу имен quarks
+    //printf("set name cname=%s id=%d\n", cname, id);
+    uint64_t sdnv = 0;
+    _sdnv_encode((uint8_t*)&sdnv, id);
+    a->sdnv = sdnv;
 }
 
 static inline void ggml_set_op_params(struct ggml_tensor  * a, void * data, size_t size){
@@ -729,7 +764,7 @@ enum _name_suffix {
     _SUFFIX_CONT,
 };
 extern const char *name_suffix[];
-extern void ggml_format_name(struct ggml_tensor *tensor,enum _name_suffix suffix, const char* name);
+extern void ggml_format_name(struct ggml_tensor *tensor,enum _name_suffix suffix, const struct ggml_tensor *ref);
 
 static inline bool ggml_is_transposed(const struct ggml_tensor * tensor);
 static inline bool ggml_is_permuted  (const struct ggml_tensor * tensor);
@@ -762,13 +797,10 @@ static inline int64_t ggml_blck_size(enum ggml_type type) {
 static inline size_t ggml_type_size(enum ggml_type type) {
     return type_traits[type].type_size;
 }
-
-struct ggml_context {
-    size_t mem_size;
-    size_t mem_offs;
-    void * mem_buffer;
-    int    n_objects;
-};
+static inline
+const char * ggml_type_name(enum ggml_type type) {
+    return type < GGML_TYPE_COUNT ? GGML_TYPE_NAME[type] /* type_traits[type].type_name */ : "NONE";
+}
 
 static inline
 void * _slice_alloc(struct ggml_context* ctx, size_t size){
@@ -787,7 +819,7 @@ struct ggml_tensor * ggml_tensor_new(
     struct ggml_tensor * tensor = g_slice_new0(struct ggml_tensor);
     // struct ggml_tensor * tensor = (struct ggml_tensor *)_slice_alloc(ctx, sizeof(struct ggml_tensor));
     // __builtin_bzero(tensor, sizeof(struct ggml_tensor));
-    // заполняем поля отличные от нуля
+    // заполняем поля отличные от нуля, op=GGML_OP_NONE
     tensor->type = type;
     for (int i = 0; i < GGML_MAX_DIMS; i++)
         tensor->ne[i] = ne[i];
@@ -797,23 +829,26 @@ struct ggml_tensor * ggml_tensor_new(
     for (int i = 2; i < GGML_MAX_DIMS; i++) {
         tensor->nb[i] = tensor->nb[i - 1]*tensor->ne[i - 1];
     }
+    return tensor;
 }
 
 static inline 
 void ggml_tensor_free(struct ggml_context * ctx, struct ggml_tensor * tensor) {
-    // g_slice_free(struct ggml_tensor, tensor);
+    for(int i=0; i<GGML_MAX_SRC; ++i){
+        if (tensor->src[i]!=NULL) 
+            ggml_tensor_free(ctx, tensor->src[i]);
+    }
+    g_slice_free(struct ggml_tensor, tensor);
 }
 static inline 
 struct ggml_tensor * ggml_tensor_dup(struct ggml_context * ctx, const struct ggml_tensor * src) {
     return ggml_tensor_new(ctx, src->type, src->ne);
 }
 static inline 
-struct ggml_tensor * ggml_tensor_view(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * src) 
+struct ggml_tensor * ggml_tensor_view(struct ggml_context * ctx,const struct ggml_tensor  * src) 
 {
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, src->type, src->ne);
-    ggml_format_name(tensor, _SUFFIX_VIEW, src->name);
+    ggml_format_name(tensor, _SUFFIX_VIEW, src);
     return tensor;
 }
 
@@ -893,7 +928,7 @@ struct ggml_tensor * ggml_transpose(
     struct ggml_tensor  * a) 
 {
     struct ggml_tensor * tensor = ggml_tensor_view(ctx, a);
-    ggml_format_name(tensor, _SUFFIX_TRANSPOSED, a->name);
+    ggml_format_name(tensor, _SUFFIX_TRANSPOSED, a);
 
     tensor->ne[0] = a->ne[1];
     tensor->ne[1] = a->ne[0];
@@ -982,13 +1017,13 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(!ggml_is_transposed(a));
 
     const size_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_tensor_new(ctx, GGML_TYPE_F32, ne);
+    struct ggml_tensor * tensor = ggml_tensor_new(ctx, GGML_TYPE_F32, ne);
 
-    result->op     = GGML_OP_MUL_MAT;
-    result->src[0] = a;
-    result->src[1] = b;
+    tensor->op     = GGML_OP_MUL_MAT;
+    tensor->src[0] = a;
+    tensor->src[1] = b;
 
-    return result;
+    return tensor;
 }
 #define ggml_dup(ctx, a)    ggml_unary_impl(ctx, GGML_OP_DUP,  a, false)
 #define ggml_sqr(ctx, a)    ggml_unary_impl(ctx, GGML_OP_SQR,  a, false)
@@ -1030,7 +1065,7 @@ struct ggml_tensor * ggml_reshape_impl(
     GGML_ASSERT(ggml_nelements(a) == ne[0]*ne[1]*ne[2]*ne[3]);
 
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, a->type, ne);
-    ggml_format_name(tensor, _SUFFIX_RESHAPED, a->name);
+    ggml_format_name(tensor, _SUFFIX_RESHAPED, a);
 
     tensor->op     = GGML_OP_RESHAPE;
     tensor->src[0] = a;
@@ -1045,7 +1080,7 @@ struct ggml_tensor * ggml_view_impl(
     size_t                offset) 
 {
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, a->type, ne);
-    ggml_format_name(tensor, _SUFFIX_VIEW, a->name);
+    ggml_format_name(tensor, _SUFFIX_VIEW, a);
 
     ggml_set_op_params(tensor, &offset, sizeof(offset));
 
@@ -1123,7 +1158,7 @@ struct ggml_tensor * ggml_reshape_2d(struct ggml_context * ctx, struct ggml_tens
 
     const size_t ne[4] = { ne0, ne1, 1, 1};
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, a->type, ne);
-    ggml_format_name(tensor, _SUFFIX_RESHAPED, a->name);
+    ggml_format_name(tensor, _SUFFIX_RESHAPED, a);
 
     tensor->op     = GGML_OP_RESHAPE;
     tensor->src[0] = a;
@@ -1143,7 +1178,7 @@ struct ggml_tensor * ggml_reshape_3d(
 
     const size_t ne[4] = { ne0, ne1, ne2, 1 };
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, a->type, ne);
-    ggml_format_name(tensor, _SUFFIX_RESHAPED, a->name);
+    ggml_format_name(tensor, _SUFFIX_RESHAPED, a);
 
     tensor->op     = GGML_OP_RESHAPE;
     tensor->src[0] = a;
@@ -1164,7 +1199,7 @@ struct ggml_tensor * ggml_reshape_4d(
 
     const size_t ne[4] = { ne0, ne1, ne2, ne3 };
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, a->type, ne);
-    ggml_format_name(tensor, _SUFFIX_RESHAPED, a->name);
+    ggml_format_name(tensor, _SUFFIX_RESHAPED, a);
 
     tensor->op     = GGML_OP_RESHAPE;
     tensor->src[0] = a;
@@ -1178,7 +1213,7 @@ struct ggml_tensor * ggml_cont_impl(
     struct ggml_tensor  * a) 
 {
     struct ggml_tensor * tensor = ggml_tensor_dup(ctx, a);
-    ggml_format_name(tensor, _SUFFIX_CONT, a->name);
+    ggml_format_name(tensor, _SUFFIX_CONT, a);
 
     tensor->op     = GGML_OP_CONT;
     tensor->src[0] = a;
@@ -1195,7 +1230,7 @@ struct ggml_tensor * ggml_cont_4d(struct ggml_context * ctx, struct ggml_tensor 
     GGML_ASSERT(ggml_nelements(a) == (ne[0]*ne[1]*ne[2]*ne[3]));
 
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, a->type, ne);
-    ggml_format_name(tensor, _SUFFIX_CONT, a->name);
+    ggml_format_name(tensor, _SUFFIX_CONT, a);
 
     tensor->op     = GGML_OP_CONT;
     tensor->src[0] = a;
@@ -1364,8 +1399,9 @@ struct gguf_tensor_info {
     size_t size;
 };*/
 typedef struct gguf_context gguf_cxt_t;
-extern int gguf_find_key(const struct gguf_context * ctx, const char * key);
+typedef struct _HTable HTable_t;
 
+extern int gguf_find_key(const struct gguf_context * ctx, const char * key);
 struct gguf_context {
     struct gguf_header header;
 
@@ -1378,6 +1414,7 @@ struct gguf_context {
 
     //uint8_t * padding;
     void * data;
+    HTable_t * htable;
 };
 
 extern uint64_t xxh64(uint64_t hash, uint8_t* data, size_t data_len);

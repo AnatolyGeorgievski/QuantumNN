@@ -1,12 +1,9 @@
 /*
 
 Сборка 
-	$ gcc -DTEST_GGUF -o test qnn_gguf.c qnn_png.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
-	$ gcc -DTEST_GGUF -O3 -march=native -o test qnn_gguf.c qnn_png.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
-	$ gcc -DTEST_GGUF -O3 -march=native -o test qnn_gguf.c qnn_png.c xxh64.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
+	$ gcc -DTEST_GGUF -O3 -march=native -o test qnn_gguf.c qnn_png.c xxh64.c quarks.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
 	
 Тестирование
-	$ ./test.exe ../../llama.cpp/models/Qwen2.5.1-Coder-7B-Instruct-Q4_K_M.gguf
 	$ ./test.exe ../../llama.cpp/models/Rombos-Coder-V2.5-Qwen-14b-Q8_0.gguf -v -n blk.1.attn_q.weight -o test.png
 
 
@@ -32,39 +29,26 @@
 #define GGUF_VERSION 	3
 #define GGUF_DEFAULT_ALIGNMENT 32
 #define GGUF_MAX_DIMS 	4// максимальный размер в файле может отличаться от макс. размерности при вычислениях GGUF_MAX_DIMS>=GGML_MAX_DIMS
-
+// private структура должна приводиться к типу tensor_t и tensor_weight_t.
 struct gguf_tensor_info {
-    struct gguf_str name;
+	uint64_t sdnv;  	 //!< SDNV идентификатор имени тензора (убрать в структуру ggml_tensor)
+    enum ggml_type type; //!< type of data: FP32, INT32, ...
+	enum ggml_type op;   //!< compute opcode: OP_NONE
+    size_t ne[GGUF_MAX_DIMS];//!< размеры тензора
+    //uint32_t n_dims; -- убрал 
 
-    uint32_t n_dims;
-    uint64_t ne[GGUF_MAX_DIMS];
+    uint64_t offset;	//!< смещение массива данных в файле GGUF, must be a multiple of `ALIGNMENT`, см. параметр модели `general.alignment`
+	void *   data;	//!< pointer to data в памяти
+    size_t 	 size;	//!< size of `data` in bytes
 
-    enum ggml_type type;
+	struct gguf_str name;// убрать в хеш таблицу .dynstr
 
-    uint64_t offset; // offset from start of `data`, must be a multiple of `ALIGNMENT`
 
-    // for writing API
-    const void * data;
-    size_t size;
-    uint64_t hash[1]; // хеш определяется через несколько вариантов хеш функции xxh64() mwc64_() ... 
 //    uint64_t uuid[2]; // уникальный идентификатор UUIDv5
 }; 
-/*
-typedef struct gguf_context gguf_cxt_t;
-struct gguf_context {
-    struct gguf_header header;
+// static_assert(offsetof(struct gguf_tensor_info,ne)==offsetof(tensor_weight_t, ne));
 
-    struct gguf_kv          * kv;
-    struct gguf_tensor_info * infos;
-
-    size_t alignment;
-    size_t offset;    // offset of `data` from beginning of file
-    size_t size;      // size of `data` in bytes
-
-    //uint8_t * padding;
-    void * data;
-};
-*/
+// static_assert(sizeof(struct gguf_tensor_info)==sizeof(tensor_weight_t));
 // -------------------
 
 struct {
@@ -88,6 +72,11 @@ const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 	[GGML_TYPE_F32 ]    = "F32",
 	[GGML_TYPE_F16 ]    = "F16",
 	[GGML_TYPE_BF16]    = "BF16",
+// QNN
+	[GGML_TYPE_HF8 ]    = "HF8", // E4M3 (Intel conversion rules https://www.intel.com/content/www/us/en/developer/articles/technical/introduction-to-oneapi-ml-common-extensions.html)
+	[GGML_TYPE_BF8 ]    = "BF8", // E5M2
+	[GGML_TYPE_E4M3FN]  = "E4M3FN",// E4M3FN
+	
 	[GGML_TYPE_Q4_0]    = "Q4_0",
 	[GGML_TYPE_Q4_1]    = "Q4_1",
 	[GGML_TYPE_Q5_0]    = "Q5_0",
@@ -119,6 +108,9 @@ const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 	[GGML_TYPE_I8_S]    = "I8_S",
 	[GGML_TYPE_TL1]     = "TL1",
 	[GGML_TYPE_TL2]     = "TL2",
+	[GGML_TYPE_I2_S]    = "I2_S",// BitNet
+	[GGML_TYPE_TQ1_0]	= "TQ1_0",
+	[GGML_TYPE_TQ2_0]	= "TQ2_0",
 	};
 	const size_t GGUF_TYPE_SIZE[GGUF_TYPE_COUNT] = {
 		[GGUF_TYPE_UINT8 ]  = sizeof(uint8_t),
@@ -191,16 +183,6 @@ static bool gguf_fread(FILE * file, void * dst, size_t size, uint64_t *offset) {
 	*offset += res;
 	return res == size;
 }
-/*! \brief кодирование элемента SDNV 
- */
-static uint8_t *  _sdnv_encode(uint8_t* sdnv, uint32_t value){
-	do {
-		uint8_t data = value & 0x7F;
-		value>>=7;
-		*sdnv++ = value? data|0x80: data;
-	} while (value);
-	return sdnv;
-}
 /*! \brief выделяет шаблон имени и индекс 
 	Планируется использовать в RPC протоколе для формирования SDNV идентификаторов объектов `cname_id.index`. 
 	Для идентификации объектов нужен словарь из `cname` - шаблонов имен. 
@@ -220,8 +202,20 @@ static int  _cname_idx(char* name){
 	} else 
 		return -1;
 }
+/*! \brief кодирование имени тензора в SDNV, сохраняет шаблон имени в хэш таблицу 
 
-static uint64_t _cname_to_sdnv(QTable_t * ht, struct gguf_str * p){
+Критерий выделения индекса - наличие символа '.' и цифры после него. В шаблоне индекс заменяется на '*'.
+Возможно тоит модифицировать под два и более индексов.
+
+	\note В реализации Quarks используется QUARK_UNDEF=0, как признак неопределенного значения. 
+	Метод _lookup() возвращает 0, если имя не найдено. В структуре хэш таблицы идентификатору 0 соответствует имя "undefined" или пустая строка.
+	Значение 0 не может быть использовано в качестве идентификатора тензора.
+
+	\param ht - указатель на хэш таблицу
+	\param p - указатель на строку в формате GGUF
+	\return SDNV - идентификатор содержащий {cname_id, index}, где cname_id - идентификатор шаблона имени, index - индекс слоя
+ */
+static uint64_t _cname_to_sdnv(QTable_t * ht, const struct gguf_str * p){
     int index = 0;
 	char buf[p->n+2]; // выделить на стеке или выделить в таблице dynstr
 	char* cname = buf;
@@ -239,7 +233,7 @@ static uint64_t _cname_to_sdnv(QTable_t * ht, struct gguf_str * p){
 
 	uint32_t cname_id = _quark_lookup(ht, buf);
 	//printf("cname %s idx=%d %d\n", buf, index, cname_id);
-	if (cname_id==0) {
+	if (cname_id==QUARK_UNDEF) {
 		cname_id = _quark_insert(ht, buf);
 		//printf("add cname %s\n", buf);
 	}
@@ -253,8 +247,7 @@ static uint64_t _cname_to_sdnv(QTable_t * ht, struct gguf_str * p){
 }
 #define STN_UNDEF 0
 #define Nbucket 256
-/*! \brief Структура хеш таблицы */
-
+/*! \brief Структура хеш таблицы для поиска тензоров в файле GGUF */
 typedef struct _HTable HTable_t;
 struct _HTable {
 	uint32_t nbucket;  // число признаков, ограничимся 256 например
@@ -387,7 +380,7 @@ uint32_t mwc32_hash (uint8_t *data, int length, const uint32_t A){
 	//uint32_t P = (A<<16)-1;
 	uint32_t h = 0xFFFF;
 	for (int i=0 ; i < length ; i++){
-		// h =  h*31u + data[i];// Спасибо Qwen'у за подсказку
+		// h =  h*31u + data[i];// Спасибо Qwen'у за подсказку -- не использую
 		h =  h + data[i];
 		h = (h&0xFFFF)*A + (h>>16);
 	}
@@ -424,7 +417,7 @@ HTable_t * _htable_new(uint32_t nchain)
 
 
 static
-uint32_t _htable_lookup_tensor_info(HTable_t *htable, const struct gguf_str *name, struct gguf_tensor_info * infos)
+int32_t _htable_lookup_tensor_info(HTable_t *htable, const struct gguf_str *name, struct gguf_tensor_info * infos)
 {
 //	uint32_t key = fnv_hash(name->data, name->n);
 	uint32_t key = mwc32_hash(name->data, name->n, MWCx_A);
@@ -436,7 +429,7 @@ uint32_t _htable_lookup_tensor_info(HTable_t *htable, const struct gguf_str *nam
 			return y;//infos[y].value;
 		y = chain[y];
 	}
-	return STN_UNDEF;
+	return -1;
 }
 
 static int hyst[Nbucket]={0};
@@ -515,7 +508,9 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
 //            fprintf(stderr, "%s: reading kv %d\n", __func__, i);
 
             gguf_fread_str(file, &kv->key,                 &offset);
-            gguf_fread (file, &kv->type, sizeof(kv->type), &offset);
+			uint32_t type = 0;
+            gguf_fread (file, &type, sizeof(type), &offset);
+			kv->type = type;
 
 //            fprintf(stderr, "%s: %3d| %-.29s|\n", __func__, i, kv->key.data);
 
@@ -608,6 +603,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
     // read the tensor infos
     if (ctx->header.n_tensors > 0) {
 		HTable_t* ht = _htable_new(ctx->header.n_tensors);
+		ctx->htable = ht;
         ctx->infos = g_malloc0(ctx->header.n_tensors * sizeof(struct gguf_tensor_info));
         if (!ctx->infos) {
             fprintf(stderr, "%s: failed to allocate memory for tensor infos\n", __func__);
@@ -620,23 +616,28 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
             struct gguf_tensor_info * info = &ctx->infos[i];
 
             for (int j = 0; j < GGUF_MAX_DIMS; ++j) info->ne[j] = 1;
-
+// сразу в струтуру quarks записать
             res = res && gguf_fread_str(file, &info->name,                       &offset);
             //res = res && gguf_fread_cname(file, (uint8_t)&info->sdnv,              &offset);
-            res = res && gguf_fread (file, &info->n_dims, sizeof(info->n_dims),  &offset);
+			uint32_t n_dims = 0;
+            res = res && gguf_fread (file, &n_dims, sizeof(n_dims),  &offset);
 
-            res = res && (info->n_dims <= GGUF_MAX_DIMS);
-
-            for (uint32_t j = 0; j < info->n_dims; ++j) {
-                res = res && gguf_fread(file, &info->ne[j], sizeof(info->ne[j]), &offset);
+            res = res && (n_dims <= GGUF_MAX_DIMS);
+			uint32_t j;
+            for (j = 0; j < n_dims; ++j) {
+				uint64_t ne = 0;
+                res = res && gguf_fread(file, &ne, sizeof(ne), &offset);
+				info->ne[j] = ne;
             }
-
-            res = res && gguf_fread (file, &info->type,   sizeof(info->type),    &offset);
+			//for (; j < GGUF_MAX_DIMS; ++j) 	info->ne[j] = 1;
+			uint32_t type = 0; // enum может кодироваться в меньшее число байт
+            res = res && gguf_fread (file, &type,   sizeof(type),    &offset);
+			info->type = type;
             res = res && gguf_fread (file, &info->offset, sizeof(info->offset),  &offset);
 
             // make sure there is no duplicated tensor names
-			uint32_t id = _htable_lookup_tensor_info(ht, &info->name, ctx->infos);
-			if (id!=0) {res = false; 
+			int32_t id = _htable_lookup_tensor_info(ht, &info->name, ctx->infos);
+			if (id>=0) {res = false; 
 				fprintf(stderr, "%s: tensor already exists #%d\n", __func__, i);
 			}
 			_htable_insert_tensor_info(ht, &info->name);
@@ -671,7 +672,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
 				printf("%3d:%2d\n", k, hh[k]);
 		}
 
-		free(ht);
+		//free(ht);
 		//_Exit(1);
     }
 fprintf(stdout, "data offset: %ld kB\n", (uint32_t)(ctx->offset/1024));
@@ -706,9 +707,11 @@ QTable_t* gguf_quarks(gguf_cxt_t* ctx) {
 	for(int i=0; i< ctx->header.n_tensors; i++){
 		struct gguf_tensor_info * info = &ctx->infos[i];
 		uint64_t sdnv = _cname_to_sdnv(qt, &info->name);
+		info->sdnv = sdnv;
 		//printf ("SDNV %04llx\n", sdnv);
 	}
 	_quark_to_csv(qt);
+	return qt;
 }
 /*! \brief вывод в терминал структуры файла */
 void gguf_print_header(gguf_cxt_t* ctx){
@@ -789,10 +792,45 @@ void gguf_print_header(gguf_cxt_t* ctx){
 		}
 	}
 }
+#undef  GGML_ASSERT
+#define GGML_ASSERT(x) if (!(x)) _Exit(0);
+enum llama_token_type {
+    LLAMA_TOKEN_TYPE_UNDEFINED    = 0,
+    LLAMA_TOKEN_TYPE_NORMAL       = 1,
+    LLAMA_TOKEN_TYPE_UNKNOWN      = 2,
+    LLAMA_TOKEN_TYPE_CONTROL      = 3,
+    LLAMA_TOKEN_TYPE_USER_DEFINED = 4,
+    LLAMA_TOKEN_TYPE_UNUSED       = 5,
+    LLAMA_TOKEN_TYPE_BYTE         = 6,
+};
+void gguf_vocab_token_types(gguf_cxt_t* ctx){
+	int key = gguf_find_key(ctx, "tokenizer.ggml.token_type");
+	int key_tokens = gguf_find_key(ctx, "tokenizer.ggml.tokens");
+	GGML_ASSERT(key>=0);
+	struct gguf_kv *kv = &ctx->kv[key];
+	struct gguf_kv *ts = &ctx->kv[key_tokens];
+
+	uint32_t hist[8]={0};
+	uint32_t n_tokens = kv->value.arr.n;
+//	printf("type=%d\n", kv->value.arr.type);
+	GGML_ASSERT(kv->value.arr.type==GGUF_TYPE_INT32);
+	const uint32_t * ttypes = kv->value.arr.data;
+	for(uint32_t i=0;i<n_tokens; i++){
+		unsigned tt = ttypes[i];
+		if (tt<8)
+			hist[tt]++;
+		if (tt==LLAMA_TOKEN_TYPE_CONTROL) {
+			struct gguf_str *str =&((struct gguf_str *) ts->value.arr.data)[i];
+			printf(" `%-.*s`", str->n, str->data);
+		}
+	}
+	printf("=== T.TYPE HYST [%d]===\n", n_tokens);
+	for (int i=0; i<8; i++) printf("%d: %d\n", i, hist[i]);
+}
 static int gguf_debug(gguf_cxt_t* ctx){
 	gguf_print_header(ctx);
 	fprintf(stdout, "2. model info:\n");
-	fprintf(stdout, "| %-30.30s| %-6s| %s | \n", "Name", "quants", "dims");
+	fprintf(stdout, "| %-30.30s| %-6s| %s  | \n", "Name", "quants", "dims");
 	fprintf(stdout, "|:---     |:--- |:--- |\n");
 	char buf[32];
 	for(uint64_t i=0; i<ctx->header.n_tensors; ++i){
@@ -804,7 +842,8 @@ static int gguf_debug(gguf_cxt_t* ctx){
 		}
 		fprintf(stdout, "| %-30.*s| %-6s| 0x%010llx ", info->name.n,info->name.data, (type_name!=NULL? type_name: "??"), info->offset);
 		char ch='[';
-		for (uint32_t j = 0; j < info->n_dims; ++j, ch=',') {
+		int n_dims = info->ne[3]==1? info->ne[2]==1? info->ne[1]==1? 1: 2: 3: 4;
+		for (uint32_t j = 0; j < n_dims; ++j, ch=',') {
 			fprintf(stdout, "%c%d", ch, info->ne[j]);
 		}
 		fprintf(stdout, "]\n" ); 
@@ -814,6 +853,48 @@ static int gguf_debug(gguf_cxt_t* ctx){
 	fprintf(stdout, "data offset: %ld kB\n", (uint32_t)(ctx->offset/1024));
 }
 
+
+// Загрузить таблицу хэшей
+int gguf_hash_load(gguf_cxt_t * ctx_gguf, char* data, size_t size)
+{
+	char* s = data;
+	char* e = data + size;
+	char* name = NULL;
+	while(s<e && s[0]!='\0'){
+		if(strncmp(s, "xxh64", 5)==0){
+			s+=6;
+			while (isspace(*s)) s++;
+			uint64_t hash = strtoull(s, &s, 16);
+			while (s[0]!=':' && s[0]!='\0') s++;
+			if(s[0]==':') {
+				s++;
+				name = s;
+				while (isalnum(*s) || *s=='.'|| *s=='_') s++;
+				int len = s - name;
+				// проверить SDNV и загрузить хэш
+				struct gguf_str str = {len, name};
+				int y = _htable_lookup_tensor_info(ctx_gguf->htable, &str, ctx_gguf->infos);
+				if (y>=0) {
+					// ctx_gguf->infos[y].hash[0] = hash;// gguf_tensor_info
+					uint64_t sdnv = ctx_gguf->infos[y].sdnv;
+					printf("xxh64: %016llx #%04x :`%.*s`\n", hash, sdnv, len, name);	
+				} else 
+					fprintf(stderr, "xxh64: `%.*s` not found\n", len, name);
+			}
+		} else if (strncmp(s, "sha256", 6)==0){
+		} else {
+			fprintf(stderr, "\n");
+			_Exit(1);
+		}
+		// до конца строки
+		while(s[0]!='\0' && s[0]!='\n') s++;
+		if (s[0]=='\n') s++;
+	}
+	return 0;
+}
+
+
+// ----------------------
 typedef struct _MainOptions MainOptions;
 struct _MainOptions {
 	char*  input_file;
@@ -1580,6 +1661,8 @@ int main (int argc, char *argv[]){
 	if (argc<2) return 0;
 	char *path = argv[1];
 	gguf_cxt_t *ctx = gguf_init_from_file(path, 0);
+
+	gguf_vocab_token_types(ctx); // статистика токенов
 	if (options.verbose) gguf_debug(ctx);
 	// найти матрицу и показать
 	if (options.name!=NULL && options.output_file!=NULL && g_str_has_suffix(options.output_file, ".png")) {

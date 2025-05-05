@@ -1,8 +1,12 @@
+#include <stdatomic.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include "quarks.h"
-#define STN_UNDEF 0
+
+#ifndef QUARK_UNDEF
+ #define QUARK_UNDEF 0
+#endif
 #define Nbucket 256
 struct _QTable {
 	uint32_t n_bucket;  // число признаков, ограничимся 256 например
@@ -37,7 +41,7 @@ static void _quark_init(QTable_t *htable, uint32_t n_bucket)
 	htable->n_bucket = n_bucket;
 	uint32_t i;
 	for (i=0; i<n_bucket; i++){
-		htable->bucket[i]=STN_UNDEF;
+		htable->bucket[i]=QUARK_UNDEF;
 	}
 }
 /*! \brief Создать словарь с размером 
@@ -50,10 +54,12 @@ QTable_t * _quark_new(uint32_t n_bucket, uint32_t n_chain)
 	htable->n_chain = n_chain;
 	htable->dynstr_size = 1024;
 	htable->dynstr = malloc(1024);
-	htable->count =0;
+	htable->count = 1;// один элемент - пустая строка
     _quark_init(htable, n_bucket);
     struct _QChain *chain = (struct _QChain *)(htable->bucket + htable->n_bucket);
-    chain[0].offs = 0;
+    chain[0].offs = 0;// пустая строка, длина строки 0
+	chain[0].next = QUARK_UNDEF;
+    chain[1].offs = 0;
     return htable;
 }
 
@@ -75,6 +81,8 @@ void _quark_dynstr_resize(QTable_t* htable, uint32_t n_chain)
 	htable->dynstr_size = dynstr_size;
 }
 /*! \brief Найти строку в словаре 
+	\param cname строка - текстовый идентификатор
+	\return индекс строки или QUARK_UNDEF
  */
 int _quark_lookup(QTable_t * htable, const char *cname) 
 {
@@ -83,39 +91,45 @@ int _quark_lookup(QTable_t * htable, const char *cname)
 // printf("lookup cname=%s key=%08x\n", cname, key);
 	uint32_t y = htable->bucket[key % (htable->n_bucket)];
     const struct _QChain *chain = (const struct _QChain *)(htable->bucket + htable->n_bucket);
-	while (y<htable->count && y!=STN_UNDEF) {
+	while (y<htable->count && y!=QUARK_UNDEF) {
 		if (strncmp(htable->dynstr + chain[y].offs, cname, len)==0) 
 			return y;
 		y = chain[y].next;
 	}
-	return STN_UNDEF;
+	return QUARK_UNDEF;
 }
 /*! \brief Добавить строку в словарь
+	\param cname строка - текстовый идентификатор
+	\return индекс добавленной строки
  */
 int _quark_insert(QTable_t * htable, const char *cname) 
 {
 	size_t len = __builtin_strlen(cname);
 	uint32_t key = fnv_hash(cname, len);
-	uint32_t y = htable->count++;//atomic_fetch_add(&htable->nchain,1);
+	uint32_t y = atomic_fetch_add(&htable->count,1);
 	// if (y==htable->n_chain) htable = _quark_resize(htable, htable->n_chain*2);
     struct _QChain *chain = (struct _QChain *)(htable->bucket + htable->n_bucket);
-	chain[y+1].offs = chain[y].offs + len; // atomic_fetch_add(&htable->size, len);
-    if (htable->dynstr_size < chain[y+1].offs) {
+	chain[y+1].offs = chain[y].offs + (len+1); // atomic_fetch_add(&htable->size, len);
+    if (htable->dynstr_size < chain[y+1].offs) {// увеличить размер буфера имен
         // _quark_dynstr_resize(htable, );
     }
 	__builtin_memcpy(htable->dynstr + chain[y].offs, cname, len);
+	htable->dynstr[chain[y].offs + len] = '\0';
 
 	uint32_t* head = &htable->bucket[key % htable->n_bucket];
+	// \todo атомарно do {} while(!CAS);
 	chain[y].next = *head;
 	*head = y;
 	return y;
 }
 /*! \brief печать таблицы имен в формате csv 
+
 	Можно использовать для преобразования в JSON формат в виде массива имен
+	\param htable - указатель на хэш таблицу
  */
 void _quark_to_csv(QTable_t * htable){
 	struct _QChain *chain = (struct _QChain *)(htable->bucket + htable->n_bucket);
-	for (int i=0; i<htable->count; i++){
+	for (int i=1; i<htable->count; i++){
 		int len = chain[i+1].offs - chain[i].offs;
 		printf("\"%.*s\"%c", len, htable->dynstr+ chain[i].offs, (i==htable->count-1)?'\n':',');
 	}
