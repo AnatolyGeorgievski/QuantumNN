@@ -10,11 +10,12 @@ _Георгиевский А.М._
 **VLM и VLA** - Visual Language and Actions модели\
 **ViT** - Vision Transformer архитектура\
 **CNN** - Convolutional Neural Networks\
-**RNN** - Recurrent Neural Networks: GRU, LSTM, STU\
+**RNN** - Recurrent Neural Networks: GRU, LSTM, STU, LMU\
 **PINN** - Physic-informed Neural Networks\
 **U-Net** - архитектура сверточнной сети для сегментации изображений\
 **KSN** - Kolmogorov-Spline Network архитектура\
-**KAN** - Kolmogorov-Arnold Network архитектура
+**KAN** - Kolmogorov-Arnold Network архитектура\
+**SSM** - State-Space Model
 
 
 ## VLM и VLA - Visual Language and Actions модели
@@ -771,7 +772,48 @@ $$\text{sim }(q, k) = \exp \left(\frac{q^T k}{\sqrt{D}}\right)$$
 
 * [K57] A. N. Kolmogorov, “On the representation of continuous functions of many variables by superposition of continuous functions of one variable and addition, ” Dokl. Akad. Nauk SSSR, pp. 953–956, vol. 114, 1957.
 * [[Igelnik03](https://ieeexplore.ieee.org/document/1215392)] B. Igelnik, at al. Kolmogorov’s Spline Network, IEEE Transactions on Neural Networks ( Volume: 14, Issue: 4, July 2003)
+
+* [[1901.08428](https://arxiv.org/pdf/1901.08428)] Cheap Orthogonal Constraints in Neural Networks: A Simple Parametrization of the Orthogonal and Unitary Group
+
+* [[LMU](https://proceedings.neurips.cc/paper_files/paper/2019/file/952285b9b7e7a1be5aa7849f32ffff05-Paper.pdf)] Voelker, A., Kajic, I., and Eliasmith, C. Legendre memory units: Continuous-time representation in recurrent neural networks. In Advances in Neural Information Processing Systems, pp. 15544–15553, 2019
+
+* [[2007.08645](https://arxiv.org/pdf/2007.08645)] Optimal Control of Port-Hamiltonian Systems: A Time-Continuous Learning Approach 
+
+* [[2010.04456](https://arxiv.org/pdf/2010.04456)] Y. Yin, V. L. Guen, J. Dona, E. de Bézenac, I. Ayed, N. Thome, and P. Gallinari. Augmenting Physical Models with Deep Networks for Complex Dynamics Forecasting. J. Stat. Mech. Theory Exp., 2021(12):124012, 2021.
+
+* [[2008.07669](https://arxiv.org/pdf/2008.07669)] HiPPO: Recurrent Memory with Optimal Polynomial Projections, October 26, 2020
+
+-- рассмотрено применение ортогональных полиномов Лежандра и Лагера. В приложении база для ортогональных полиномов: Лежандра, Лагера и полиномов Чебышева. Системы ортогональных полиномов образуют базис функций, позволяющий выразить любую функцию в виде суммы полиномов. Свойство ортогональности и нормированности (с учетом меры в интеграле Лебега или весовой функции в итеграле Стильтьеса) приводит к определению системы как Гильбетово пространства. А Гильбертово пространство - изоморфно вероятностному пространству, что позволяет интерпретировать интегралы как плотности вероятности. 
+
+Надо понимать, что любое разложение данной степени по системе ортогональных (базисных) полиномов изоморфно другим системам с той же степнью. Вопрос использования полиномов Лежандра - это вопрос производительности операций в данном базисе функций. Рекурентная сеть на элементе HiPPO в тестах продемонстрировала высокую производительность, в разы выще чем LSTM и LMU. Предложена довольно простая архитектура, которая может быть использована для распознавания физики. LMU, и модели HiPPO показали высокие результаты, по сравнению с LSTM. 
+
+* [[2405.07344](https://arxiv.org/pdf/2405.07344)] TKAN: Temporal Kolmogorov-Arnold Networks\
+-- предложена модель нейросети совмещающая KAN и RNN.
+
+* [[2405.08790](https://arxiv.org/pdf/2405.08790)] Kolmogorov-Arnold Networks (KANs) for Time Series Analysis
+* [[2406.02486](https://arxiv.org/pdf/2406.02486)] A Temporal Kolmogorov-Arnold Transformer for Time Series Forecasting
+* [[2406.02496](https://arxiv.org/pdf/2406.02496)] Kolmogorov-Arnold Networks for Time Series: Bridging Predictive Power and Interpretability
+* [[2406.18726](https://arxiv.org/pdf/2406.18726)] P. Zaspel and M. Günther. Data-driven identification of port-Hamiltonian DAE systems by Gaussian processes.
+* [[2407.10347](https://arxiv.org/pdf/2407.10347)] Enhancing Long-range Dependency with State Space Model and
+Kolmogorov-Arnold Networks for Aspect-based Sentiment Analysis\
+-- взять определения
+* [[2408.08185](https://arxiv.org/pdf/2408.08185)] Data-driven identification of latent port-Hamiltonian systems
+
 * [[2410.04096](https://arxiv.org/pdf/2410.04096)] Sinc Kolmogorov-Arnold Network and Its Applications on Physics-informed Neural Networks
 
--- Не могу согласиться, использование разного рода полиномов кроме ортогонльных полиномов и базисных полиномов, на мой взгляд, уводит в сторону от физики. Можно согласиться использовать ортогональные полиномы Эрмита, Чебышева, Якоби в задачах физических и так называемых PINN (Physic-informed Neural Network), таких как описание волн на поверхности или описание динамики частиц. В данной работе надо как-то обозначить возможность представление физики с использованием базисных полиномов и конечных разностей подобно фильтрам с бесконечной импульсной характеристикой. В оригинальной работе KAN я не могу согласиться с использованием SILU активации. По сути предложенная архитектура не является полностью КАN. Вся сеть должна строится на принципах KAN. Необходимо использовать модель основанную на фильтрах с бесконечной-импульсной характеристикой и с физической интерпретацией модели в Z-пространстве, возможно использовать архитектуру SSM (State-Space Models) и рекуррентные модели (RNN такие как GRU и STU).
+-- Не могу согласиться, использование разного рода полиномов кроме ортогонльных полиномов и базисных полиномов, на мой взгляд, уводит в сторону от физики. Вычисление полиномов сложнее чем B-сплайны, подобно тригонометрическим полиномам - тупиковый путь для моделей. Можно согласиться использовать ортогональные полиномы Эрмита, Лежандра, Чебышева, Якоби в задачах физических и так называемых PINN (Physic-informed Neural Network), таких как описание волн на поверхности или описание динамики частиц. В данной работе надо как-то обозначить возможность представление физики с использованием базисных полиномов и конечных разностей подобно фильтрам с бесконечной импульсной характеристикой. В оригинальной работе KAN я не могу согласиться с использованием SILU активации. По сути предложенная архитектура не является полностью КАN. Вся сеть должна строится на принципах KAN. Необходимо использовать модель основанную на фильтрах с бесконечной-импульсной характеристикой и с физической интерпретацией модели в Z-пространстве, возможно использовать архитектуру SSM (State-Space Models) и рекуррентные модели (RNN такие как GRU и STU).
+* [[2410.14939](https://arxiv.org/pdf/2410.14939)] HiPPO-KAN: Efficient KAN Model for Time Series Analysis
+* [[2412.19673](https://arxiv.org/pdf/2412.19673)] Port-Hamiltonian nonlinear systems
+* [[2501.06118](https://arxiv.org/pdf/2501.06118)] Nonlinear port-Hamiltonian system identification from input-state-output data\
+-- пройтись по списку литературы
+* [[2502.14432](https://arxiv.org/pdf/2502.14432)] Port-Hamiltonian Neural Networks with Output Error Noise Models
+* [[2504.17063](https://arxiv.org/pdf/2504.17063)] Port-Hamiltonian modeling of rigid multibody systems\
+-- использован Port-Hamiltonian подход для моделирования нелинейных жестких многотельных систем, подверженных ограничениям по положению и скорости.
+* [[2506.16392](https://arxiv.org/pdf/2506.16392)] State-Space Kolmogorov-Arnold Networks for Interpretable Nonlinear System Identification
+
+* [[2501.06965](https://arxiv.org/pdf/2501.06965)] 
+
+
+
+
 
