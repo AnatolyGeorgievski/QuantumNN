@@ -443,10 +443,31 @@ static inline uint32_t MODB(uint64_t a, uint32_t q, uint32_t U) {
     uint64_t c4 = a - q*(c2>>32);
     return  (c4>= q)? c4 - q: c4;
 }
-
 /* Shoup modular multiplication. The most time-consuming primitive in NTT algorithms
 is modular multiplication between the coefficients of a and the fixed (precomputed)
 powers of ω. */
+uint32_t soup_MULM(uint32_t a, uint64_t b, uint32_t p){
+    uint64_t w = (b<<32)/p;
+    uint64_t q = (a*w)>>32;
+    uint32_t r = a*b - q*p;
+    return  (r>= p)? r - p: r;
+}
+uint32_t soup2_MULM(uint32_t a, uint64_t b, uint32_t p){
+    uint64_t w = b;
+    int l = __builtin_clzll(w);// количество ноликов в старшей части числа
+    w = (w<<(l))/p;
+
+    if (w<(1uLL<<32)) {
+        w<<=1; l++;
+    }
+    w -= (1uLL<<32);
+
+    //printf ("%08llx %08llx %08llx", b, (b<<(l)), w);
+
+    uint64_t q = (((a*w)>>32) + a)>>(l-32);
+    uint64_t r = a*b - q*p;
+    return  (r>= p)? r - p: r;
+}
 
 /*! \brief Хеширование данных 
     \param h - хеш-код 0 <= h < q
@@ -682,20 +703,38 @@ uint32_t mwc32_hash_16(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
 static uint32_t div_c0(uint32_t b, int *nd) 
 {
 	uint32_t C;
+    int n;
 	int k = __builtin_ctz(b);// количество ноликов в младшей части числа
 		// count trailing zeros
 	b>>=k;
 	if (b==1) {
-		*nd = 32;
+		n = 0;
 		C = 0;//0x1ULL<<32;
 	} else
 	{
-		*nd = 64 - __builtin_clz(b);// количество ноликов в старшей части числа
-		C = (uint64_t)(((1ULL<<32)-b)<<(*nd-32))/b + (1ULL<<(*nd-32)) + 1;
+		n = 32 - __builtin_clz(b);// количество ноликов в старшей части числа
+		C = (uint64_t)(((1ULL<<32)-b)<<n)/b + (1ULL<<n) + 1;
 	}
-	*nd+=k;
+	*nd=k+n;
 	return C & 0xFFFFFFFFUL;
-}/*! \brief проверка по множеству целых чисел без знака 32 бита 
+}
+static uint32_t div_c1(uint32_t b, int *nd) 
+{
+	uint32_t C;
+    int n;
+	int k = __builtin_ctz(b);
+	b>>=k;
+	if (b==1) {
+		n = 0; C = 0;//0x1ULL<<32;
+	} else
+	{
+		n = 32 - __builtin_clz(b);// количество ноликов в старшей части числа
+		C = (uint64_t)(((1ULL<<32)-b)<<n)/b + (1ULL<<n);
+	}
+	*nd=k+n;
+	return C & 0xFFFFFFFFUL;
+}
+/*! \brief проверка по множеству целых чисел без знака 32 бита 
 	для выражения uint32_t Q = (((A*(uint64_t)C0)>>32)+A)>>(n0-32);
  */
 static int verify32(uint32_t B, uint32_t C0, int n0) {
@@ -947,6 +986,23 @@ int main(int argc, char **argv){
             }
         }
     }
+    if (1) {// soup test
+        for (int k = 13; k< sizeof(primes)/sizeof(primes[0]); k++) {
+            uint32_t p = primes[k];
+            for (uint32_t a =p+0xFFFE; a>0; a--){
+                uint32_t b = a+3;
+                uint32_t c = soup2_MULM(a, b, p);
+                //uint32_t c = soup_MULM(a, b%p, p);
+                uint32_t d = ((uint64_t)a*b)%p;
+                if (c != d) {
+                    printf("fail %08x * %08x = %08x != %08x\n", a, b, c, d);
+                    //_Exit(1);
+                }
+            }
+            printf("Prime %08x, soup test done\n", p);
+        }
+
+    }
     if (1) {
         uint32_t g=3;
         while (gcd(g, Q0 - 1) != 1) g++;
@@ -1013,22 +1069,6 @@ int main(int argc, char **argv){
         if (POWM(omega, k, Q0) == 1) 
             printf("k-th root %x\n", omega);
         return 0;
-    }
-    if (1) {
-        uint32_t q0 = 8380417;
-        int len = mwc32_length(1, q0);
-        printf("Prime %08x, order %08x\n", q0, len);
-        
-        uint64_t ur = (((uint128_t)1<<64)-0)/q0;
-        //uint64_t ur = INVL(q0);
-        int nd = 64 - __builtin_clz(q0);// количество ноликов в старшей части числа
-        // uint64_t u0 = (uint64_t)(-q0)/q0;
-        uint32_t u0 = div_c0(q0, &nd);
-        int n0 = 32 - __builtin_clz(q0);
-        
-        printf("Prime %08x, Q = x%08x (%d bit) Ur=%08llx ", q0, u0, n0, ur);
-        if (verify32(q0, u0, nd)) return 0;
-        printf(" ..ok\n");
     }
     if (1) {
         uint32_t q0 = 8380417;
