@@ -214,7 +214,7 @@ static inline void poly_addm(const uint32_t *a, const uint32_t *b, uint32_t *res
         _mm512_storeu_epi32(result + i, vr);
     }
 }
-/*! \brief сдвиг и редуцирование полинома (b) по модулю (x^N + 1) и сложение с полином (a)
+/*! \brief ротация полинома (b) по модулю (x^N + 1) и сложение с полином (a)
     \param a First polynomial (array of 256 uint32_t coefficients).
     \param b Second polynomial (array of 256 uint32_t coefficients).
     \param r Output polynomial (array of 256 uint32_t coefficients).
@@ -228,6 +228,24 @@ static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_
         __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
         c = _mm512_alignr_epi32 (vb,c, 15);
         va = _addm(va, c, q);
+        _mm512_storeu_epi32(r + i, va);
+        c = vb;
+    }
+}
+/*! \brief ротация полинома (b) по модулю (x^N + 1) и вычитание из полинома (a)
+    \param a First polynomial (array of 256 uint32_t coefficients).
+    \param b Second polynomial (array of 256 uint32_t coefficients).
+    \param r Output polynomial (array of 256 uint32_t coefficients).
+ */
+static inline void poly_xtime_subm(const uint32_t *a, const uint32_t *b, uint32_t *r) {
+    __m512i q = _mm512_set1_epi32(Q_PRIME);
+    __m512i c = _mm512_loadu_epi32((const void *)(b + 256-16)); // перенос    
+    c = _mm512_sub_epi32(q, c);         // c = q - c
+    for (int i = 0; i < 256; i += 16) {
+        __m512i va = _mm512_loadu_epi32((const void *)(a + i));
+        __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
+        c = _mm512_alignr_epi32 (vb,c, 15);
+        va = _subm(va, c, q);
         _mm512_storeu_epi32(r + i, va);
         c = vb;
     }
@@ -404,6 +422,9 @@ static inline uint32_t MULM(uint32_t a, uint32_t b, uint32_t q) {
 static inline uint32_t ADDM(uint32_t a, uint32_t b, uint32_t q) {
     return ((unsigned __int64)a + b)%q;
 }
+static inline uint32_t SUBM(uint32_t a, uint32_t b, uint32_t q) {
+    return ((unsigned __int64)a + q - b)%q;
+}
 static inline uint32_t SQRM(uint32_t a, uint32_t q) {
     return ((unsigned __int64)a*a)%q;
 }
@@ -516,6 +537,94 @@ static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
 }
 static inline uint32_t INVM(uint32_t a, const uint32_t q){
     return POWM(a, q-1, q);
+}
+
+/*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
+    \param a First polynomial (array of 256 uint32_t coefficients). return NTT(a) in bit-reversed order.
+    \param gamma store powers of gamma in bit-reverse ordering
+    \param N power of 2
+    \param q prime modulus $q \equiv 1 \mod 2N$
+
+
+    * [2012.01968](https://arxiv.org/pdf/2012.01968)
+    * [2103.16400](https://arxiv.org/pdf/2103.16400) 
+*/
+uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
+    unsigned int i, j, k, m;
+    uint32_t t;
+    t = N;
+    for (m = 1; m < N; m = 2*m) {
+        t = t/2;
+        for (i=0; i<m; i++) {
+            unsigned j_1 = 2*i*t;
+            unsigned j_2 = j_1 + t;
+            uint32_t w = gamma[m+i];
+            for (j = j_1; j < j_2; j++) {
+                uint32_t x_0 = a[j];
+                uint32_t x_1 = a[j+t];
+                uint32_t wx = MULM(x_1, w, q);
+                a[j]   = ADDM(x_0, wx, q);
+                a[j+t] = SUBM(x_0, wx, q);
+            }
+        }
+    }
+    return a;
+}
+/*! \brief Gentleman-Sande (GS) Radix-2 InvNTT 
+    \param a First polynomial $a = (a_0, a_1, ..., a_{N-1})$ array of 256 uint32_t coefficients in bit-reverse ordering).
+    \param gamma store powers of $\gamma^{-1}$ in bit-reverse ordering
+    \param N power of 2
+    \param N_inv inverse of N modulo $q$
+    \param q prime modulus satisfying $q \equiv 1 \mod 2N$
+ */
+uint32_t* invNTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
+    unsigned int i, j, k, m;
+    unsigned int t, j_1, j_2;
+    t = 1;
+    for (m = N; m > 1; m = m/2) {
+        j_1 = 0;
+        unsigned int h = m/2;
+        for (i=0; i<h; i++) {
+            j_2 = j_1 + t;
+            uint32_t w = gamma[h+i];
+            for (j = j_1; j < j_2; j++) {
+                uint32_t x_0 = a[j];
+                uint32_t x_1 = a[j+t];
+                a[j]   = ADDM(x_0, x_1, q);
+                a[j+t] = MULM(SUBM(x_0, x_1, q), w, q);
+            }
+            j_1 = j_1 + 2*t;
+        }
+        t = t*2;
+    }
+    uint32_t N_inv = INVM(N, q);
+    for (j = 0; j < N; j++) {// эту операцию совместить со следующей
+        a[j] = MULM(a[j], N_inv, q);
+    }
+    return a;
+}
+/*! \brief Precompute powers of $\gamma$ and $\omega$ for NTT and InvNTT
+ */
+void nnt_precompute(uint32_t* gamma, uint32_t *omega, uint32_t* g_inv, uint32_t* o_inv,
+    unsigned int N, uint32_t q) 
+{
+    uint32_t N_inv = INVM(N, q);
+    uint32_t gamma1 = gamma[1];
+    uint32_t omega1 = omega[1];
+    uint32_t o_inv1 = INVM(omega1, q);
+    uint32_t g_inv1 = INVM(gamma1, q);
+    gamma[0] = 1; g_inv[0] = 1; g_inv[1] = g_inv1;
+    omega[0] = 1; o_inv[0] = 1; o_inv[1] = o_inv1;
+    uint32_t gm = gamma1;
+    uint32_t om = omega1;
+    uint32_t gi = g_inv1;
+    uint32_t oi = o_inv1;
+    for (int i=2; i<N; i++) {
+        gamma[i] = gm = MULM(gm, gamma1, q);
+        omega[i] = om = MULM(om, omega1, q);
+        g_inv[i] = gi = MULM(gi, g_inv1, q);
+        o_inv[i] = oi = MULM(oi, o_inv1, q);
+    }
 }
 
 /*! \brief Специальный вид инверсии для алгоритма редуцирования $\lfloor (2^{64}-q)/q \rfloor$ */
@@ -651,9 +760,17 @@ uint32_t gcd(uint32_t u, uint32_t v) {
     }
 	return v << k;
 }
-/*! выбор генератора */
+/*! выбор генератора  - это утверждение эквивалентно символу якоби 
+    
+    jacobi(a, p) = -1, если a является квадратичным не-вычетом по модулю p.
+    a^(p-1)/2 mod p -- эквивалентное утверждение. 
+Legendre symbol:
+
+$$\left({\frac {a}{p}}\right)\equiv a^{\tfrac{p-1}{2}}{\pmod {p}}.$$
+    
+ */
 uint32_t mwc32_gen(uint32_t gen, uint32_t P){
-    while (gcd(gen, P-1)!=1 || POWM(gen, P/2, P)==1)gen++;
+    while (gcd(gen, P-1)!=1 || POWM(gen, (P-1)/2, P)==1)gen++;
     return gen;
 }
 
@@ -664,7 +781,24 @@ uint32_t mwc32_gen(uint32_t gen, uint32_t P){
    x = _y;                \
    y = _x;                \
  } while(0)
+/*! \brief Jacobi symbol 
+    \param a - произвольное целое число
+    \param m - положительное целое число, нечетное и не равное 1
+    \return 1, если a является квадратичным вычетом по модулю m 
+    (существует целое число x такое, что x^2 ≡ a (mod m)), 
+    -1, если a является квадратичным невычетом по модулю m, 
+    0, если a кратно m.
 
+    Свойства
+    jacobi(a,m) = jacobi(b,m) если a = b (mod m)
+    jacobi(a,m) = 0, если a кратно m (gcd(a,m) \neq 1)
+    jacobi(a,m) = jacobi(a, m/a) если a нечётно и a кратно m
+    
+    Си́мвол Яко́би — теоретико-числовая функция двух аргументов, введённая К. Якоби в 1837 году. 
+    Является квадратичным характером в кольце вычетов.
+    
+    Символ Якоби обобщает символ Лежандра на все нечётные числа, большие единицы.
+ */
 int jacobi(uint64_t a, uint64_t m) 
 {
 	a = a%m;
@@ -695,7 +829,89 @@ uint32_t generate_quadratic_non_residue(uint32_t gen, uint32_t P){
     while (jacobi(gen,P)!=-1) gen++;
     return gen;
 }
+/*! \brief Поиск корня степени N= 2^s по модулю простого числа q
+    \return (r^2)^N = 1 mod q
+ */
+uint32_t ntt_root(uint32_t N, uint32_t q){
+    uint32_t gen =  3;// выбор генератора - квадратичный не-вычет
+    while (jacobi(gen,q)!=-1) gen++;
+    uint32_t r = gen;
+    do {
+        while ( POWM(r, N+N, q)!=1)
+            r = MULM(r, gen, q);
+    } while (POWM(r, N, q)==1);
+    return r;
+}
+uint32_t primes[] = {
+    (1u<<23) -(1u<<13)+1, // NIST
+//            (1u<<31) -1, // Mersenne 31
+    (1u<<31) -(1u<<27)+1,
+    (1u<<31) -(1u<<25)+1,
+//            (1u<<31) -(1u<<24)+1,
+    (1u<<31) -(1u<<19)+1,
+    (1u<<31) -(1u<<17)+1,
+    (1u<<31) -(1u<< 9)+1,
 
+    (0x7efcu<<16) + 1,
+    (0x7db2u<<16) + 1,
+    (0x7bffu<<16) + 1,
+    (0x7b27u<<16) + 1,
+    (0x7a55u<<16) + 1,
+    (0x7a46u<<16) + 1,
+    (0x79efu<<16) + 1,
+    (0x78c0u<<16) + 1,
+
+    (0xff7bu<<16) + 1,
+    (0xff03u<<16) + 1,
+    (0xfe04u<<16) + 1,
+    (0xfcf6u<<16) + 1,
+    (0xfcd2u<<16) + 1,
+    (0xfb13u<<16) + 1,
+    (0xfa8fu<<16) + 1,
+    (0xf9eau<<16) + 1,
+    (0xf9d5u<<16) + 1,
+    (0xf960u<<16) + 1,
+    (0xf921u<<16) + 1,
+    (0xf915u<<16) + 1,
+    (0xf8d6u<<16) + 1,
+    (0xf8c7u<<16) + 1,
+    (0xf804u<<16) + 1,
+
+    (0xFFF0u<<16)+1,// 2^32 - 2^20 +1
+    (0xC000u<<16)+1,// 2^32 - 2^30 +1
+// не содержат корней от -1
+#if 0
+    (0xFFEAu<<16) - 1,
+    (0xFFD7u<<16) - 1,
+    (0xFFBDu<<16) - 1,
+    (0xFFA8u<<16) - 1,
+    (0xFF9Bu<<16) - 1,
+    (0xFF81u<<16) - 1,
+    (0xFF80u<<16) - 1,
+    (0xFF7Bu<<16) - 1,
+    (0xFF75u<<16) - 1,
+    (0xFF48u<<16) - 1,
+    (0xFF3Fu<<16) - 1,
+    (0xFF3Cu<<16) - 1,
+    (0xFF2Cu<<16) - 1,
+    (0xFF09u<<16) - 1,
+    (0xFF03u<<16) - 1,
+    (0xFF00u<<16) - 1,
+    (0xFEEBu<<16) - 1,
+    (0xFEE4u<<16) - 1,
+    (0xFEA8u<<16) - 1,
+    (0xFEA5u<<16) - 1,
+    (0xFEA0u<<16) - 1,
+    (0xFE94u<<16) - 1,
+    (0xFE8Bu<<16) - 1,
+    (0xFE72u<<16) - 1,
+    (0xFE4Eu<<16) - 1,
+    (0xFE30u<<16) - 1,
+    (0xFE22u<<16) - 1,
+    (0xFE15u<<16) - 1,
+    (0xFE04u<<16) - 1,
+#endif
+    };
 
 int main(int argc, char **argv){
     const uint32_t U0 = INVL(Q0);
@@ -742,85 +958,16 @@ int main(int argc, char **argv){
         uint32_t r  = POWM(g, (Q0-1)/2, Q0);// найти корень квадратный
         // x ≡ ± a^{(p+1)/4} (mod p). 
         uint32_t r256 = 2;
-        uint32_t primes[] = {
-            (1u<<23) -(1u<<13)+1, // NIST
-//            (1u<<31) -1, // Mersenne 31
-            (1u<<31) -(1u<<27)+1,
-            (1u<<31) -(1u<<25)+1,
-            (1u<<31) -(1u<<24)+1,
-            (1u<<31) -(1u<<19)+1,
-            (1u<<31) -(1u<<17)+1,
-            (1u<<31) -(1u<< 9)+1,
-
-            (0x7efcu<<16) + 1,
-            (0x7db2u<<16) + 1,
-            (0x7bffu<<16) + 1,
-            (0x7b27u<<16) + 1,
-            (0x7a55u<<16) + 1,
-            (0x7a46u<<16) + 1,
-            (0x79efu<<16) + 1,
-            (0x78c0u<<16) + 1,
-
-            (0xff7bu<<16) + 1,
-            (0xff03u<<16) + 1,
-            (0xfe04u<<16) + 1,
-            (0xfcf6u<<16) + 1,
-            (0xfcd2u<<16) + 1,
-            (0xfb13u<<16) + 1,
-            (0xfa8fu<<16) + 1,
-            (0xf9eau<<16) + 1,
-            (0xf9d5u<<16) + 1,
-            (0xf960u<<16) + 1,
-            (0xf921u<<16) + 1,
-            (0xf915u<<16) + 1,
-            (0xf8d6u<<16) + 1,
-            (0xf8c7u<<16) + 1,
-            (0xf804u<<16) + 1,
-
-            (0xFFF0u<<16)+1,// 2^32 - 2^20 +1
-            (0xC000u<<16)+1,// 2^32 - 2^30 +1
-// не содержат корней от -1
-#if 0
-            (0xFFEAu<<16) - 1,
-            (0xFFD7u<<16) - 1,
-            (0xFFBDu<<16) - 1,
-            (0xFFA8u<<16) - 1,
-            (0xFF9Bu<<16) - 1,
-            (0xFF81u<<16) - 1,
-            (0xFF80u<<16) - 1,
-            (0xFF7Bu<<16) - 1,
-            (0xFF75u<<16) - 1,
-            (0xFF48u<<16) - 1,
-            (0xFF3Fu<<16) - 1,
-            (0xFF3Cu<<16) - 1,
-            (0xFF2Cu<<16) - 1,
-            (0xFF09u<<16) - 1,
-            (0xFF03u<<16) - 1,
-            (0xFF00u<<16) - 1,
-            (0xFEEBu<<16) - 1,
-            (0xFEE4u<<16) - 1,
-            (0xFEA8u<<16) - 1,
-            (0xFEA5u<<16) - 1,
-            (0xFEA0u<<16) - 1,
-            (0xFE94u<<16) - 1,
-            (0xFE8Bu<<16) - 1,
-            (0xFE72u<<16) - 1,
-            (0xFE4Eu<<16) - 1,
-            (0xFE30u<<16) - 1,
-            (0xFE22u<<16) - 1,
-            (0xFE15u<<16) - 1,
-            (0xFE04u<<16) - 1,
-#endif
-            };
-        uint32_t k = 256;
+        uint32_t k = 16;
         for (int i=0; i<sizeof(primes)/sizeof(primes[0]); i++) {
             uint32_t m31 = primes[i];
             //uint32_t gen =  mwc32_gen(2, m31);
             uint32_t gen =  generate_quadratic_non_residue(3, m31);
             // printf("poly %x quadratic residue %x\n", m31, gen2);
-            r256 = gen;
-//            if (jacobi(gen, m31)==-1) 
-//                printf("poly %x has no square roots\n", m31);
+            if ((m31-1)%(2*k)!=0) {
+                printf("poly %x has no k-th root\n", m31);
+                continue;
+            }
             if (m31%4==3) {
 //                uint32_t sq = POWM(gen, (m31+1)/4, m31);
                 uint32_t sq = POWM(gen, (m31-1)/2, m31);
@@ -830,16 +977,20 @@ int main(int argc, char **argv){
 
                 continue;
             }
-
+            uint32_t g = ntt_root(k, m31);
+            r256 = SQRM(g,m31);
+/*            r256 = gen;
             while (POWM(r256, k, m31)!=1 || POWM(r256, k/2, m31)==1) //r256++;
                 r256 = MULM(r256, gen, m31);
             //if (gcd(r256, m31-1)==1) continue;
-            if (0) for (int j = 0; j < k; j++) {
+
+*/
+
+            if (1) for (int j = 0; j < k; j++) {
                 uint32_t r = POWM(r256, j, m31);
                 printf("%08x ", r); 
             }
             printf("\n"); 
-
 //            uint32_t r2 = POWM(gen, MULM(Q0-1, INVM(k, m31), m31), m31);
             printf("prime %08x gen=%x root=%x r^%d=%x %x\n", m31, gen, r256, k, 
                 POWM(r256, k, m31), POWM(MULM(r256,r256, m31), k/2, m31));
@@ -848,7 +999,6 @@ int main(int argc, char **argv){
             if (POWM(gen, a, m31) == r256) 
                 printf("root k-th %x\n", a); */
         }
-
         uint32_t r2 = POWM(g, (Q0+1)/4, Q0);// найти корень 4й r2^4 = g^2 g^(q+1)/2 ≡ g^2 = -5
         if (MULM(r, r, Q0) == 1) printf("root2 gen=%d r=%x r2=%x %x\n", g, r, r2, 
             POWM(r2,2,Q0));
@@ -921,6 +1071,7 @@ int main(int argc, char **argv){
         }
 #elif __AVX2__
         if (1) {// проверка векторной реализации
+            printf("AVX2: Barret reduction\n");
             __m256i U = _mm256_set1_epi64x(U0);   // barrett constant
             __m256i q = _mm256_set1_epi64x(Q0);   // prime
 
