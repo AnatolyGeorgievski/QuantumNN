@@ -447,15 +447,15 @@ static inline uint32_t MODB(uint64_t a, uint32_t q, uint32_t U) {
 is modular multiplication between the coefficients of a and the fixed (precomputed)
 powers of ω. */
 uint32_t soup_MULM(uint32_t a, uint64_t b, uint32_t p){
-    uint64_t w = (b<<32)/p;
+    uint64_t w = (double)(b<<32)/p;
     uint64_t q = (a*w)>>32;
-    uint32_t r = a*b - q*p;
-    return  (r>= p)? r - p: r;
+    uint64_t r = a*b - q*p;
+    return  (r-p< r)? r - p: r;// min(r, r-p)
 }
 uint32_t soup2_MULM(uint32_t a, uint64_t b, uint32_t p){
     uint64_t w = b;
     int l = __builtin_clzll(w);// количество ноликов в старшей части числа
-    w = (w<<(l))/p;
+    w = (double)(w<<(l))/p;// ⌊((w≪n)⋅β)/p⌉ округление к ближайшему целому
 
     if (w<(1uLL<<32)) {
         w<<=1; l++;
@@ -466,14 +466,36 @@ uint32_t soup2_MULM(uint32_t a, uint64_t b, uint32_t p){
 
     uint64_t q = (((a*w)>>32) + a)>>(l-32);
     uint64_t r = a*b - q*p;
-    return  (r>= p)? r - p: r;
+    return  (r-p < r)? r - p: r;
 }
+/*! \brief Редукция Монтгомери 
+    Работает на z<p, q<2^{31}
 
+    \param q - prime
+    \param p - 
+    \return $zR \mod q$ , R = 2^{-32} 
+ */
+uint32_t  mont_modm(uint64_t z, uint32_t q, uint64_t p){
+    uint32_t m = z * p; // low product z_0 (1/q)
+    z = (z + m*(uint64_t)q)>>32; // high product
+    if (z>=q) z-=q;
+    return  (uint32_t)z;
+}
+// Функция для вычисления q^{-1} mod 2^32
+uint32_t mod_inverse(uint32_t q) {
+    uint32_t q_inv = 1;
+    for (int i = 1; i < 32; i++) {
+        if (((q * q_inv) & ((~0uL)>>(31-i))) != 1) {
+            q_inv += (1u<<i);
+        }
+    }
+    return q_inv;
+}
 /*! \brief Хеширование данных 
     \param h - хеш-код 0 <= h < q
     \param d - данные 
     \param q - модуль простого числа
-    \param U - специальная константа Барретта U = ⌊(2^{64} −q)/q⌋ 
+    \param U - специальная константа Барретта U = ⌊(2^{64} -q)/q⌋ 
     \param K - сдвиговая константа, K = 2^N mod q
     \return хеш-код 32 бита
  */
@@ -618,33 +640,54 @@ uint32_t* invNTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q)
         }
         t = t*2;
     }
-    uint32_t N_inv = INVM(N, q);
+    uint32_t N_inv = INVM(N, q); //8347681 = 256^{-1} mod q
     for (j = 0; j < N; j++) {// эту операцию совместить со следующей
         a[j] = MULM(a[j], N_inv, q);
     }
     return a;
+}
+uint8_t RevBits8(uint8_t x){
+    x = ((x & 0x55) << 1) | ((x & 0xAA) >> 1);
+    x = ((x & 0x33) << 2) | ((x & 0xCC) >> 2);
+    x = ((x & 0x0F) << 4) | ((x & 0xF0) >> 4);
+    return x;
+}
+uint32_t RevBits(uint32_t x){
+    x = ((x & 0x55555555) << 1) | ((x & 0xAAAAAAAA) >> 1);
+    x = ((x & 0x33333333) << 2) | ((x & 0xCCCCCCCC) >> 2);
+    x = ((x & 0x0F0F0F0F) << 4) | ((x & 0xF0F0F0F0) >> 4);
+    x = ((x & 0x00FF00FF) << 8) | ((x & 0xFF00FF00) >> 8);
+    x = ((x & 0x0000FFFF) <<16) | ((x & 0xFFFF0000) >>16);
+    return x;
 }
 /*! \brief Precompute powers of $\gamma$ and $\omega$ for NTT and InvNTT
  */
 void nnt_precompute(uint32_t* gamma, uint32_t *omega, uint32_t* g_inv, uint32_t* o_inv,
     unsigned int N, uint32_t q) 
 {
-    uint32_t N_inv = INVM(N, q);
+    uint32_t N_inv  = INVM(N, q);
     uint32_t gamma1 = gamma[1];
     uint32_t omega1 = omega[1];
     uint32_t o_inv1 = INVM(omega1, q);
     uint32_t g_inv1 = INVM(gamma1, q);
-    gamma[0] = 1; g_inv[0] = 1; g_inv[1] = g_inv1;
-    omega[0] = 1; o_inv[0] = 1; o_inv[1] = o_inv1;
+    gamma[0] = 1; g_inv[0] = 1; 
+    omega[0] = 1; o_inv[0] = 1;
+    uint32_t k = RevBits(1)>>8;
+    gamma[k] = gamma1;
+    omega[k] = omega1;
+    g_inv[k] = g_inv1;
+    o_inv[k] = o_inv1;
+
     uint32_t gm = gamma1;
     uint32_t om = omega1;
     uint32_t gi = g_inv1;
     uint32_t oi = o_inv1;
-    for (int i=2; i<N; i++) {
-        gamma[i] = gm = MULM(gm, gamma1, q);
-        omega[i] = om = MULM(om, omega1, q);
-        g_inv[i] = gi = MULM(gi, g_inv1, q);
-        o_inv[i] = oi = MULM(oi, o_inv1, q);
+    for (uint32_t i=2; i<N; i++) {// обратный порядок бит.
+        uint32_t k = RevBits(i)>>8;
+        gamma[k] = gm = MULM(gm, gamma1, q);
+        omega[k] = om = MULM(om, omega1, q);
+        g_inv[k] = gi = MULM(gi, g_inv1, q);
+        o_inv[k] = oi = MULM(oi, o_inv1, q);
     }
 }
 
@@ -679,6 +722,14 @@ static uint64_t POWM128(const uint64_t b, uint64_t a, const uint64_t P)
 uint32_t mwc32_hash(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
     h = (0xFFFF&h)*a + (h>>16) + d;// rotl(h, 16) - (0x10000 - a)*(uint16_t)h
     if (h>= q) h-=q;
+    return h;
+}
+uint32_t mwc32_next(uint32_t h, const uint32_t A){
+    h = (h&0xFFFFu)*A + (h>>16);
+    return h;
+}
+int32_t mwc32s_next(int32_t h, const int16_t A){
+    h = (h&0xFFFFu)*A - (h>>16);
     return h;
 }
 
@@ -886,7 +937,7 @@ uint32_t primes[] = {
 //            (1u<<31) -1, // Mersenne 31
     (1u<<31) -(1u<<27)+1,
     (1u<<31) -(1u<<25)+1,
-//            (1u<<31) -(1u<<24)+1,
+            (1u<<31) -(1u<<24)+1,
     (1u<<31) -(1u<<19)+1,
     (1u<<31) -(1u<<17)+1,
     (1u<<31) -(1u<< 9)+1,
@@ -918,25 +969,43 @@ uint32_t primes[] = {
 
     (0xFFF0u<<16)+1,// 2^32 - 2^20 +1
     (0xC000u<<16)+1,// 2^32 - 2^30 +1
+
+    //0xff7b0001, 0xff030001, 0xfe040001, 0xfcf60001, 0xfcd20001,
+    0x7f000001, 0x7e100001, 0x7e000001, 0x7d200001, 0x7ce00001, 0x7c800001, 0x7bd00001, 0x79500001, 0x78c00001, 0x78000001,
+/*
+prime=7f000001 gen=3 ord 007effff
+prime=7e100001 gen=3 ord 03f07fff
+prime=7e000001 gen=5 ord 00a7ffff
+prime=7d200001 gen=3 ord 03e8ffff
+prime=7ce00001 gen=7 ord 03e6ffff
+prime=7c800001 gen=5 ord 014bffff
+prime=7bd00001 gen=3 ord 008d7fff
+prime=79500001 gen=5 ord 03ca7fff
+prime=78c00001 gen=5 ord 01e2ffff
+prime=78000001 gen=11 ord 03bfffff
+*/
+//    0xffdf0001, 0xffd50001, 0xffd30001, 0xff970001, 0xff930001, 0xff7b0001, 0xff6f0001, 0xff2b0001, 0xff0d0001, 0xff030001, 0xff010001,
+    //0x7fe01001, 0x7fc5d001, 0x7fabf001, 0x7f555001, 0x7f3c9001, 0x7f0ff001, 
+
 // не содержат корней от -1
 #if 0
     (0xFFEAu<<16) - 1,
-    (0xFFD7u<<16) - 1,
-    (0xFFBDu<<16) - 1,
+//    (0xFFD7u<<16) - 1,
+//    (0xFFBDu<<16) - 1,
     (0xFFA8u<<16) - 1,
-    (0xFF9Bu<<16) - 1,
-    (0xFF81u<<16) - 1,
+//    (0xFF9Bu<<16) - 1,
+//    (0xFF81u<<16) - 1,
     (0xFF80u<<16) - 1,
-    (0xFF7Bu<<16) - 1,
-    (0xFF75u<<16) - 1,
+//    (0xFF7Bu<<16) - 1,
+//    (0xFF75u<<16) - 1,
     (0xFF48u<<16) - 1,
-    (0xFF3Fu<<16) - 1,
+//    (0xFF3Fu<<16) - 1,
     (0xFF3Cu<<16) - 1,
     (0xFF2Cu<<16) - 1,
     (0xFF09u<<16) - 1,
     (0xFF03u<<16) - 1,
     (0xFF00u<<16) - 1,
-    (0xFEEBu<<16) - 1,
+//    (0xFEEBu<<16) - 1,
     (0xFEE4u<<16) - 1,
     (0xFEA8u<<16) - 1,
     (0xFEA5u<<16) - 1,
@@ -947,8 +1016,28 @@ uint32_t primes[] = {
     (0xFE4Eu<<16) - 1,
     (0xFE30u<<16) - 1,
     (0xFE22u<<16) - 1,
-    (0xFE15u<<16) - 1,
+//    (0xFE15u<<16) - 1,
     (0xFE04u<<16) - 1,
+    (0xFE00u<<16) - 1,
+/*
+prime=ffe9ffff A=ffea gen= 5 ord 7ff4fffe
+prime=ffa7ffff A=ffa8 gen= 5 ord 7fd3fffe
+prime=ff7fffff A=ff80 gen= 3 ord 7fbffffe
+prime=ff47ffff A=ff48 gen=13 ord 7fa3fffe
+prime=ff3bffff A=ff3c gen=13 ord 7f9dfffe
+prime=ff2bffff A=ff2c gen= 3 ord 7f95fffe
+prime=feffffff A=ff00 gen= 7 ord 7f7ffffe
+prime=fee3ffff A=fee4 gen= 3 ord 7f71fffe
+prime=fea7ffff A=fea8 gen= 3 ord 7f53fffe
+prime=fe9fffff A=fea0 gen= 5 ord 7f4ffffe
+prime=fe93ffff A=fe94 gen=11 ord 7f49fffe
+prime=fe71ffff A=fe72 gen= 3 ord 7f38fffe
+prime=fe4dffff A=fe4e gen= 3 ord 7f26fffe
+prime=fe2fffff A=fe30 gen= 3 ord 7f17fffe
+prime=fe21ffff A=fe22 gen= 5 ord 7f10fffe
+prime=fe03ffff A=fe04 gen= 5 ord 7f01fffe
+prime=fdffffff A=fe00 gen= 3 ord 7efffffe
+*/
 #endif
     };
 
@@ -986,13 +1075,100 @@ int main(int argc, char **argv){
             }
         }
     }
+
+    if (1) {// mwc32s
+        if (0) for (int k = 1; k<= 0x200; k++) {// MWC32
+            uint32_t p = (1uLL<<32) - (k<<16) - 1;
+            uint32_t h = 3;//p>>16;
+            if ((p&3)==3) h = p-1;// выбор генератора по умолчанию
+            else {
+                h=2;
+                while (jacobi(h, p)!=-1) h++;
+            }
+            uint32_t g = h;
+            uint32_t a = (p>>16)+1;
+            for(uint32_t i=0; i<(uint32_t)p+1; i++){
+                h = mwc32_next(h, a);
+                if (h==g) {
+                    if ((i&0xFFFF)==0xFFFE && i==p/2-1)
+                    printf("prime=%08x A=%04x gen=%2d ord %08x\n", p, a, g-p, i);
+                    break;
+                }
+            }
+        }
+        if (1) for (int k = 1; k< 0x3FFF; k++) {// MWC32s
+            int32_t p = (1uLL<<31) - (k<<16) + 1;
+            int32_t h = 3;//p>>16;
+            while (jacobi(h, p)!=-1) h++;
+            int32_t g = h;
+            for(uint32_t i=0; i<(uint32_t)p+1; i++){
+                h = mwc32s_next(h, p>>16);
+                if (h==g) {
+                    if ((i&0x7FFE)==0x7FFE)
+                    printf("prime=%08x gen=%2d ord %08x\n", p, g, i);
+                    break;
+                }
+            }
+        }
+        for (int k = 0; k< sizeof(primes)/sizeof(primes[0]); k++) {
+            const int32_t p = primes[k];
+            int32_t h = 5;//p>>16;
+            while (jacobi(h, p)!=-1) h++;
+            // h = generate_quadratic_non_residue(3, (uint32_t)p);
+            int32_t g = h;
+            //printf("mwc32s prime=%08x gen=%d\n",(uint32_t)p, g);
+            for(uint32_t i=0; i<(uint32_t)p+1; i++){
+                h = mwc32s_next(h, p>>16);
+/*
+                if (p>0 && (h>=p || h<=-p)) {
+                    printf("fail %08x: %08x\n", i, h);
+                    break;
+                }
+                if (p<0 && (h>=-p || h<=p)) {
+                    printf("fail %08x: %08x\n", i, h);
+                    break;
+                } */
+                if (h==g) {
+                    if ((i&0xFFFF)==0xFFFF)
+                        printf("mwc32s prime=%08x gen=%2d ord %08x\n",p,g, i);
+                    break;
+                }
+            }
+        }
+        return 0;
+    }
+    if (1) {// montgomery test
+        uint32_t p = primes[0];
+        uint32_t pi = -mod_inverse(p); 
+        uint32_t qinv=4236238847;
+        printf ("prime=%u pi = %u %x \n",p, pi, p*qinv);
+        for (int k = 1; k< 15/* sizeof(primes)/sizeof(primes[0]) */; k++) {
+            uint32_t p = primes[k];
+            uint32_t pi = mod_inverse(p);
+            printf ("p=%08x pi = %08x %08x \n",p, pi, p*(-pi));
+            for (uint32_t a =p; a>0; a--)
+            {
+                uint32_t b  = ((uint64_t)a<<32)%p;
+                uint64_t a2 = (uint64_t)a*b;
+
+                uint32_t r  = mont_modm(a2, p, -pi);
+                uint32_t r2 = ((uint64_t)a*a)%p;
+                if (r2!=r) {
+                    printf ("r = %08x %08x p=%08x \n", r,r2,a);
+                     break;
+                }
+            }
+            //break;
+        }
+        return 0;
+    }
     if (1) {// soup test
         for (int k = 13; k< sizeof(primes)/sizeof(primes[0]); k++) {
             uint32_t p = primes[k];
-            for (uint32_t a =p+0xFFFE; a>0; a--){
-                uint32_t b = a+3;
-                uint32_t c = soup2_MULM(a, b, p);
-                //uint32_t c = soup_MULM(a, b%p, p);
+            for (uint32_t a =p+0xFFFF; a>0; a--){
+                uint32_t b = ((uint64_t)a+3)%p;
+                //uint32_t c = soup2_MULM(a, b, p);
+                uint32_t c = soup_MULM(a, b, p);
                 uint32_t d = ((uint64_t)a*b)%p;
                 if (c != d) {
                     printf("fail %08x * %08x = %08x != %08x\n", a, b, c, d);
