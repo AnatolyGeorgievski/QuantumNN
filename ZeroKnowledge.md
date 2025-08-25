@@ -1843,7 +1843,58 @@ float convert_mwc32_to_f32(uint32_t m, int ex){
 }
 ```
 
+Второй вариант преобразования, соответствует операциям модульной арифметики со знаком $-q<m<q$, $q<2^{31}$.
+```cpp
+int32_t convert_f32_to_mwc32s(float f){
+    f = frexpf(f,&ex);     // загрузка экспоненты, результат в интервале [0.5,1)
+    int32_t m = rint(f*M);// округление до ближайшего целого RNE
+    return (m*(int64_t)K[ex+E_OFF])%q;// умножение на сдвиговую константу по модулю `q`
+}
+```
+```cpp
+float convert_mwc32s_to_f32(int32_t m, int ex){
+    m = (m*(int64_t)Kr[ex+E_OFF])%q; // умножение на сдвиговую константу по модулю `q`
+    return ldexpf(m, ex-24);
+}
+```
 Расчет сдвиговых констант $K_n = 2^n \mod q$ и обратных констант $K_{-n} = 2^{-n} \mod q$ выполняется с использованием функции модульного возведения в степень. Параметром преобразования для разных типов данных является M- число бит в мантиссе. 
+
+Пример округления RNE при переходе между типами F32 и E4M3 для нормализованных чисел:
+```cpp
+	uint32_t fixup = (m>>20)&1;
+	m = (m + 0x7ffffu+fixup)>>20;
+```
+Аналогично выглядит переход между типами F64 и FP16 для нормализованных чисел:.
+
+Заслуживает внимания тема округления с распределением ошибки, т.н. stochastic rounding.
+
+* [[US10684824B2](https://patents.google.com/patent/US10684824B2/en)] Stochastic rounding of numerical values
+
+{разобрать пример и алгоритм stochastic rounding.}. 
+
+* [[doi:10.1137/20M1334796](https://doi.org/10.1137/20M1334796)] Stochastic Rounding and Its Probabilistic Backward Error Analysis, 2021
+
+
+* [[2410.10517](https://arxiv.org/pdf/2410.10517)] Stochastic Rounding 2.0, with a View towards Complexity Analysis
+
+*Определение* 
+Let $\mathcal{F} ⊆ \mathbb{R}$ denote a number system. For $x ∈ \mathbb{R}$, define the two rounding candidates
+```math
+\lfloor x \rfloor = \min\{y ∈ \mathcal{F} : y ≤ x\}, \quad \lceil x \rceil = \max\{y ∈ \mathcal{F} : y ≥ x\}.
+```
+so that $\lfloor x \rfloor ≤ x ≤ \lceil x \rceil$, with equality throughout if $x ∈ \mathcal{F}$. Note that when $x \not\in F$, the two numbers
+$\lfloor x \rfloor$ and $\lceil x \rceil$ are adjacent in $\mathcal{F}$. We denote by fl any rounding operator that maps numbers in $\mathbb{R}$ to either of the two nearest numbers in $\mathcal{F}$.
+For $x ∈ \mathbb{R} \backslash \mathcal{F}$, SR is defined by
+
+```math
+\mathrm{fl}(x) = \begin{cases}
+\lceil  x \rceil,  & \text{with probability }q(x), \\
+\lfloor x \rfloor, & \text{with probability }1- q(x)
+\end{cases}
+```
+```math
+q(x) =\frac{x - \lfloor x \rfloor}{\lceil x \rceil - \lfloor x \rfloor}
+```
 
 | формат  | M  | обозн |
 | ---     |---:| ---   |
@@ -1852,6 +1903,15 @@ float convert_mwc32_to_f32(uint32_t m, int ex){
 | Float16 | 10 | E5M10 |
 | BF8     | 2  | E5M2  |
 | FP8     | 3  | E4M3  |
+
+Правила преобразования для различных типов векторов можно выполнить через приведение к типу _Float32. Кроме того, необходимо определить правила округления при переходе между типами: RNE или RTZ. Заявлен еще один режим округления: stocastic. По умолчанию используется RNE (rounding to nearest even) для всех типов. В языке OpenCL C по-умолчанию используется RTZ (rounding to zero). Следует обратить внимание, что на некоторых платформах округление может работать как RN(x) = RTZ(x+0.5), round to nearest. 
+
+* [[EP4318229A1](https://patents.google.com/patent/EP4318229A1/en)] Instructions to convert from fp16 to fp8
+
+BF8 и HF8-based operations support round to nearest even (RNE) and stochastic rounding.
+
+{Сослаться на схему CKKS}
+{Разобрать вариант округления RNE для тернарных векторов}. Определить правило округления для с компенсацией ошибки округления методом накопления и компенсации ошибки с использованием типа BFloat16.
 
 {Рассмотреть частный случай Float32} E8M23
 
