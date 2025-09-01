@@ -219,11 +219,11 @@ static inline void poly_addm(const uint32_t *a, const uint32_t *b, uint32_t *res
     \param b Second polynomial (array of 256 uint32_t coefficients).
     \param r Output polynomial (array of 256 uint32_t coefficients).
  */
-static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_t *r) {
+static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_t *r, const unsigned int N) {
     __m512i q = _mm512_set1_epi32(Q_PRIME);
-    __m512i c = _mm512_loadu_epi32((const void *)(b + 256-16)); // перенос
+    __m512i c = _mm512_loadu_epi32((const void *)(b + N-16)); // перенос
     c = _mm512_sub_epi32(q, c);         // c = q - c
-    for (int i = 0; i < 256; i += 16) {
+    for (int i = 0; i < N; i += 16) {
         __m512i va = _mm512_loadu_epi32((const void *)(a + i));
         __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
         c = _mm512_alignr_epi32 (vb,c, 15);
@@ -231,6 +231,23 @@ static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_
         _mm512_storeu_epi32(r + i, va);
         c = vb;
     }
+}
+/*! \brief нелинейная функция для Poseidon2 
+    \param s вектор состояния
+    \param c константы (round constants)
+    \param e степень 3,5,7,11 -- выбирается в зависимости от q (модуля) gcd(e, q-1)=1
+ */
+static inline __m512i _sbox(__m512i s, __m512i c,  unsigned int e){
+    __m512i q = _mm512_set1_epi32(Q_PRIME);
+    __m512i u = _mm512_set1_epi64(U_BARRETT);
+    s = _addm(s, c, q);
+    __m512i r = s;
+    while ((e>>=1)!=0) {
+        s = _sqrm(s, q, u);
+        if (e&1)
+            r = _addm(r, s, q);
+    }
+    return r;
 }
 /*! \brief ротация полинома (b) по модулю (x^N + 1) и вычитание из полинома (a)
     \param a First polynomial (array of 256 uint32_t coefficients).
@@ -250,18 +267,19 @@ static inline void poly_xtime_subm(const uint32_t *a, const uint32_t *b, uint32_
         c = vb;
     }
 }
-/*! \brief Операция умножения полинома на скаляр и сложение с результатом r = r*x + a*\beta
+/*! \brief Операция умножения полинома на скаляр и сложение с результатом r = r*x + a*b
     \param a First polynomial (array of 256 uint32_t coefficients).
     \param b scalar (uint32_t).
     \param r Output polynomial (array of 256 uint32_t coefficients).
+    \param N степень полинома (x^N + 1)
  */
-static inline void poly_xtime_madd(const uint32_t *a, const uint32_t b, uint32_t *r) {
+static inline void poly_xtime_madd(const uint32_t *a, const uint32_t b, uint32_t *r, const unsigned int N) {
     __m512i q = _mm512_set1_epi32(Q_PRIME);
     __m512i u = _mm512_set1_epi64(U_BARRETT);
     __m512i vb= _mm512_set1_epi32(b);
-    __m512i c = _mm512_loadu_epi32((const void *)(r + 256-16)); // перенос
-    c = _mm512_sub_epi32(q, c);
-    for (int i = 0; i < 256; i += 16) {
+    __m512i c = _mm512_loadu_epi32((const void *)(r + N-16)); // перенос
+    c = _mm512_sub_epi32(q, c);// операция выполняется для полинома (x^N+1), для (x^N-1) не нужна
+    for (int i = 0; i < N; i += 16) {// если N=256
         __m512i va = _mm512_loadu_epi32((const void *)(a + i)); 
         __m512i vr = _mm512_loadu_epi32((const void *)(r + i));
         va = _mulm(va, vb, q, u);
@@ -579,9 +597,10 @@ static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
 	return s;
 }
 static inline uint32_t INVM(uint32_t a, const uint32_t q){
-    return POWM(a, q-1, q);
+    return POWM(a, q-2, q);
 }
 
+uint32_t RevBits(uint32_t x);
 /*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
     \param a First polynomial (array of 256 uint32_t coefficients). return NTT(a) in bit-reversed order.
     \param gamma store powers of gamma in bit-reverse ordering
@@ -591,9 +610,10 @@ static inline uint32_t INVM(uint32_t a, const uint32_t q){
 
     * [2012.01968](https://arxiv.org/pdf/2012.01968)
     * [2103.16400](https://arxiv.org/pdf/2103.16400) 
+    * [2024/585](https://eprint.iacr.org/2024/585.pdf) 
 */
 uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
-    unsigned int i, j, k, m;
+    unsigned int i, j, m;
     uint32_t t;
     t = N;
     for (m = 1; m < N; m = 2*m) {
@@ -605,13 +625,127 @@ uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
             for (j = j_1; j < j_2; j++) {
                 uint32_t x_0 = a[j];
                 uint32_t x_1 = a[j+t];
+                //printf("%d-%d ", j, j+t);
                 uint32_t wx = MULM(x_1, w, q);
                 a[j]   = ADDM(x_0, wx, q);
                 a[j+t] = SUBM(x_0, wx, q);
             }
+            //printf("ntt-gamma[%d]=%x\n", m+i, w);
         }
     }
     return a;
+}
+/*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
+    референсная реализация
+    \param r результат преобразования
+    \param a исходный вектор
+    \param gamma N-th root of unity
+    \param N power of 2
+    \param q prime modulus $q \equiv 1 \mod 2N$
+ */
+void NTT_ref(uint32_t* r, const uint32_t *a, const uint32_t gamma, unsigned int N, uint32_t q)
+{
+    uint32_t d, g = 1;
+    for (int i = 0; i<N; i++){
+        uint32_t s = a[0];
+        uint32_t w = g;
+        for (int j = 1; j<N; j++){
+            d = MULM(a[j], w, q);
+            s = ADDM(s, d, q);
+            w = MULM(w, g, q);
+        }
+        r[i] = s;
+        g = MULM(g, gamma, q);
+    }
+}
+/*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
+    negative-wrap for negacyclic polynomial x^N + 1
+    \param r результат преобразования
+    \param a исходный вектор
+    \param gamma 2N-th root of unity
+    \param N power of 2
+    \param q prime modulus $q \equiv 1 \mod 2N$
+*/
+void NTT_nw_ref(uint32_t* r, const uint32_t *a, const uint32_t gamma, unsigned int N, uint32_t q)
+{
+    uint32_t d, g = gamma;
+    uint32_t g2 = SQRM(gamma, q);
+    for (int i = 0; i<N; i++){
+        uint32_t s = a[0];
+        uint32_t w = g;
+        for (int j = 1; j<N; j++){
+            d = MULM(a[j], w, q);
+            s = ADDM(s, d, q);
+            w = MULM(w, g, q);
+        }
+        r[i] = s;
+        g = MULM(g, g2, q);
+    }
+}
+/*! \brief Домножить вектор на степени гаммы 
+    Используется для коррекции полинома для применения NTT. 
+    \param a вектор N-элементов, коэффициенты полинома
+    \param gamma 2N-th root of unity
+    \param N power of 2, степень полинома (x^N + 1)
+    \param q prime modulus $q \equiv 1 \mod 2N$
+ */ 
+void poly_gamma(uint32_t *a, const uint32_t gamma, uint32_t N, uint32_t q){
+    uint32_t g = 1;
+    for(int i=1; i<N; i++){
+        a[i] = MULM(a[i], g, q);
+        g = MULM(g, gamma, q);
+    }
+}
+/*! \brief Обратное Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
+    референсная реализация
+    \param r результат преобразования
+    \param a исходный вектор
+    \param gamma обратная величина N-th root of unity gamma^{-1}
+    \param N power of 2
+    \param q prime modulus $q \equiv 1 \mod 2N$
+
+ */
+void invNTT_ref(uint32_t* r, const uint32_t *a, const uint32_t gamma, unsigned int N, uint32_t q)
+{
+    uint32_t N_inv = INVM(N, q);
+    uint32_t d, g = 1;
+    for (int i = 0; i<N; i++){
+        uint32_t s = a[0];
+        uint32_t w = g;
+        for (int j = 1; j<N; j++){
+            d = MULM(a[j], w, q);
+            s = ADDM(s, d, q);
+            w = MULM(w, g, q);
+        }
+        r[i] = MULM(s, N_inv, q);
+        g = MULM(g, gamma, q);
+    }
+}
+/*! \brief Обратное Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
+    референсная реализация для negative wrap for negacylic polynomial $x^N + 1$
+    \param r результат преобразования
+    \param a исходный вектор
+    \param gamma обратная величина 2N-th root of unity gamma^{-1}
+    \param N power of 2
+    \param q prime modulus $q \equiv 1 \mod 2N$
+ */
+void invNTT_nw_ref(uint32_t* r, const uint32_t *a, const uint32_t gamma, unsigned int N, uint32_t q)
+{
+    uint32_t N_inv = INVM(N, q);
+    uint32_t d, g = 1;
+    uint32_t g2 = SQRM(gamma, q);
+    for (int i = 0; i<N; i++){
+        uint32_t s = a[0];
+        uint32_t w = g;
+        for (int j = 1; j<N; j++){
+            d = MULM(a[j], w, q);
+            s = ADDM(s, d, q);
+            w = MULM(w, g, q);
+        }
+        r[i] = MULM(s, N_inv, q);
+        N_inv= MULM(N_inv, gamma, q);
+        g    = MULM(g, g2, q);
+    }
 }
 /*! \brief Gentleman-Sande (GS) Radix-2 InvNTT 
     \param a First polynomial $a = (a_0, a_1, ..., a_{N-1})$ array of 256 uint32_t coefficients in bit-reverse ordering).
@@ -662,7 +796,7 @@ uint32_t RevBits(uint32_t x){
 }
 /*! \brief Precompute powers of $\gamma$ and $\omega$ for NTT and InvNTT
  */
-void nnt_precompute(uint32_t* gamma, uint32_t *omega, uint32_t* g_inv, uint32_t* o_inv,
+void ntt_precompute4(uint32_t* gamma, uint32_t *omega, uint32_t* g_inv, uint32_t* o_inv,
     unsigned int N, uint32_t q) 
 {
     uint32_t N_inv  = INVM(N, q);
@@ -690,7 +824,37 @@ void nnt_precompute(uint32_t* gamma, uint32_t *omega, uint32_t* g_inv, uint32_t*
         o_inv[k] = oi = MULM(oi, o_inv1, q);
     }
 }
-
+/*! \brief Расчет вектора степеней корня степени N для применения в NTT
+    \param r вектор степеней корня степени N, записывается в bit-reversed order
+    \param gamma N-th root of unity
+    \param N power of 2, степень полинома (x^N + 1)
+    \param q prime modulus $q \equiv 1 \mod 2N$
+ */ 
+void ntt_precompute_rev(uint32_t* r, uint32_t gamma, uint32_t N, uint32_t q) {
+    uint32_t g = gamma;
+    int s = __builtin_clz(N-1);
+    r[RevBits(0u)>>s] = 1;
+//    r[RevBits(1u)>>s] = g;
+    for (uint32_t i=1; i<N; i++) {
+        r[(RevBits(i)>>s)] = g;
+        g = MULM(g, gamma, q);
+    }
+}
+/*! \brief Расчет вектора степеней корня степени 2N для применения в NTT
+    \param r вектор степеней корня степени N, записывается в порядке возрастания степени
+    \param gamma 2N-th root of unity
+    \param N power of 2, степень полинома (x^N + 1)
+    \param q prime modulus $q \equiv 1 \mod 2N$
+ */ 
+void ntt_precompute(uint32_t* r, uint32_t gamma, unsigned int N, uint32_t q) {
+    uint32_t g = gamma;
+    r[0] = 1;
+    r[1] = g;
+    for (uint32_t i=2; i<N; i++) {
+        g = MULM(g, gamma, q);
+        r[i] = g;
+    }
+}
 /*! \brief Специальный вид инверсии для алгоритма редуцирования $\lfloor (2^{64}-q)/q \rfloor$ */
 static inline uint64_t INVL128(uint64_t v) {
     return ((unsigned __int128)(-v)<<64)/v;
@@ -731,6 +895,11 @@ uint32_t mwc32_next(uint32_t h, const uint32_t A){
 int32_t mwc32s_next(int32_t h, const int16_t A){
     h = (h&0xFFFFu)*A - (h>>16);
     return h;
+}
+uint32_t mwc32u_next(uint32_t h, const uint32_t A){
+    uint32_t r = (h&0xFFFFu)*A - (h>>16);
+    if (r > (A<<16)) r+= (A<<16)+1;
+    return r;
 }
 
 uint32_t mwc32_hash_16(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
@@ -914,12 +1083,14 @@ int jacobi(uint64_t a, uint64_t m)
  */
 uint32_t generate_quadratic_non_residue(uint32_t gen, uint32_t P){
     if ((P&3)==3) return P-1;
-    if ((P&7)==5) return 2;
+    if ((P&7)==5) return 2;// 2 примитивный корень для p = 3 mod 8 или p = 5 mod 8.
 
     while (jacobi(gen,P)!=-1) gen++;
     return gen;
 }
-/*! \brief Поиск корня степени N= 2^s по модулю простого числа q
+/*! \brief Поиск корня степени 2N= 2^s по модулю простого числа q
+    \param N степень полинома (x^N + 1)
+    \param q простое число, нечетное $q = 1 mod 2N$
     \return (r^2)^N = 1 mod q
  */
 uint32_t ntt_root(uint32_t N, uint32_t q){
@@ -932,6 +1103,20 @@ uint32_t ntt_root(uint32_t N, uint32_t q){
     } while (POWM(r, N, q)==1);
     return r;
 }
+/*! \brief Простые числа вида 2^W - A 2^N + 1 
+    https://www.rieselprime.de/ziki/Proth_prime
+    https://en.wikipedia.org/wiki/Proth_prime
+
+    A Proth prime is not a true class of numbers, but primes in the form $k•2^n+1$ with $2^n > k$ 
+    are often called _Proth primes_.
+    The primality of a Proth number can be tested with Proth's theorem, which states that a 
+    Proth number $p$ is prime if and only if there exists an integer $a$ for which
+    $a^{\frac{p-1}{2}}\equiv -1 \pmod{p}$.
+    This theorem can be used as a probabilistic test of primality, by checking for many random choices of 
+    $a$ whether $a^{\frac{p-1}{2}}\equiv -1 \pmod{p}$. If this fails to hold for several random 
+    $a$, then it is very likely that the number $p$ is composite.
+
+*/
 uint32_t primes[] = {
     (1u<<23) -(1u<<13)+1, // NIST
 //            (1u<<31) -1, // Mersenne 31
@@ -940,16 +1125,28 @@ uint32_t primes[] = {
             (1u<<31) -(1u<<24)+1,
     (1u<<31) -(1u<<19)+1,
     (1u<<31) -(1u<<17)+1,
-    (1u<<31) -(1u<< 9)+1,
 
-    (0x7efcu<<16) + 1,
-    (0x7db2u<<16) + 1,
+    0x7fe7f001, 0x7fe01001, 0x7fd35001, 0x7fc5d001, 
+
+    0xffffd001, 0xfffbb001, 0xfff16001, 0xffddb001, 
+    0xffd4b001, 0xffbd7001, 0xffb5f001, 0xffb11001, 
+    0xffae7001, 0xff83b001, 0xff5da001, 0xff502001, 
+    0xff4ae001, 0xff382001,
+
+//    (1u<<31) -(1u<< 9)+1,
+
+    0x7ffd5601, 0x7ffd2601, 0x7ff8e201, 0x7ff83a01, 
+    0x7ff82e01, 0x7ff04201, 0x7fee9201, 0x7fea4201,
+
+    0xffffca01, 0xfffef201, 0xfffe2601, 0xfffce201, 
+    0xfffa4e01, 0xfff55601, 0xfff30a01, 0xffefc201, 
+    0xffea2201, 0xffe72e01, 0xffe6da01, 0xffe3c201, 
+
     (0x7bffu<<16) + 1,
     (0x7b27u<<16) + 1,
-    (0x7a55u<<16) + 1,
     (0x7a46u<<16) + 1,
     (0x79efu<<16) + 1,
-    (0x78c0u<<16) + 1,
+
 
     (0xff7bu<<16) + 1,
     (0xff03u<<16) + 1,
@@ -957,35 +1154,25 @@ uint32_t primes[] = {
     (0xfcf6u<<16) + 1,
     (0xfcd2u<<16) + 1,
     (0xfb13u<<16) + 1,
-    (0xfa8fu<<16) + 1,
-    (0xf9eau<<16) + 1,
     (0xf9d5u<<16) + 1,
     (0xf960u<<16) + 1,
-    (0xf921u<<16) + 1,
-    (0xf915u<<16) + 1,
     (0xf8d6u<<16) + 1,
     (0xf8c7u<<16) + 1,
     (0xf804u<<16) + 1,
 
-    (0xFFF0u<<16)+1,// 2^32 - 2^20 +1
+    (0xFFDFu<<16)+1,
+
+    (0xFFACu<<16)+1,
+    (0xFFA2u<<16)+1,
+    (0xFF97u<<16)+1,
+    (0xFF93u<<16)+1,
+    (0xFF82u<<16)+1,
+    (0xFF7Bu<<16)+1,
+
+//    (0xFFF0u<<16)+1,// 2^32 - 2^20 +1
     (0xC000u<<16)+1,// 2^32 - 2^30 +1
 
-    //0xff7b0001, 0xff030001, 0xfe040001, 0xfcf60001, 0xfcd20001,
-    0x7f000001, 0x7e100001, 0x7e000001, 0x7d200001, 0x7ce00001, 0x7c800001, 0x7bd00001, 0x79500001, 0x78c00001, 0x78000001,
-/*
-prime=7f000001 gen=3 ord 007effff
-prime=7e100001 gen=3 ord 03f07fff
-prime=7e000001 gen=5 ord 00a7ffff
-prime=7d200001 gen=3 ord 03e8ffff
-prime=7ce00001 gen=7 ord 03e6ffff
-prime=7c800001 gen=5 ord 014bffff
-prime=7bd00001 gen=3 ord 008d7fff
-prime=79500001 gen=5 ord 03ca7fff
-prime=78c00001 gen=5 ord 01e2ffff
-prime=78000001 gen=11 ord 03bfffff
-*/
-//    0xffdf0001, 0xffd50001, 0xffd30001, 0xff970001, 0xff930001, 0xff7b0001, 0xff6f0001, 0xff2b0001, 0xff0d0001, 0xff030001, 0xff010001,
-    //0x7fe01001, 0x7fc5d001, 0x7fabf001, 0x7f555001, 0x7f3c9001, 0x7f0ff001, 
+    0x7f000001, 0x7e100001, 0x7e000001, 0x7d200001, 0x7c800001, 0x7bd00001,
 
 // не содержат корней от -1
 #if 0
@@ -1040,7 +1227,13 @@ prime=fdffffff A=fe00 gen= 3 ord 7efffffe
 */
 #endif
     };
+/*! \brief проверка корректности вычислений 
 
+    1. Проверка выбора простых чисел вида (2^W - a 2^N + 1) 
+    2. Проверка операций преобразования вещественных чисел в модульную арифметику
+    2. Проверка операций преобразования вещественных чисел в модульную арифметику
+    3. Выбор простых чисел для операции MWC32 и MWC32s (модульная арифметика со знаком)
+ */
 int main(int argc, char **argv){
     const uint32_t U0 = INVL(Q0);
 #if __AVX512F__
@@ -1076,7 +1269,8 @@ int main(int argc, char **argv){
         }
     }
 
-    if (1) {// mwc32s
+    if (0) {// mwc32s
+        printf("MWC32 test\n");
         if (0) for (int k = 1; k<= 0x200; k++) {// MWC32
             uint32_t p = (1uLL<<32) - (k<<16) - 1;
             uint32_t h = 3;//p>>16;
@@ -1096,7 +1290,27 @@ int main(int argc, char **argv){
                 }
             }
         }
-        if (1) for (int k = 1; k< 0x3FFF; k++) {// MWC32s
+        for (int k = 0; k< sizeof(primes)/sizeof(primes[0]); k++) {
+            const uint32_t p = primes[k];
+            uint32_t h = 3;
+            while (jacobi(h, p)!=-1 || gcd(h,p-1)!=1 || POWM(h, (p-1)/2, p)==1) h+=2;
+            // h = generate_quadratic_non_residue(3, (uint32_t)p);
+            uint32_t g = h;
+            uint32_t a = p>>__builtin_ctz(p-1);
+            for(uint32_t i=0; i<(uint32_t)p+1; i++){
+                //h = (h*(uint64_t)(p>>16))%p;
+                h = (h*(uint64_t)g)%p;
+                if (h==g || h==1) {
+                   //if (i>=p/2-2)
+                        printf("mwc32 prime=%08x gen=%2d ord %08x=%d\n",p,g, i, (p-1)/(i+1));
+                    break;
+                }
+            }
+        }
+
+
+        printf("MWC32s test\n");
+        if (0) for (int k = 1; k< 0x3FFF; k++) {// MWC32s
             int32_t p = (1uLL<<31) - (k<<16) + 1;
             int32_t h = 3;//p>>16;
             while (jacobi(h, p)!=-1) h++;
@@ -1113,7 +1327,7 @@ int main(int argc, char **argv){
         for (int k = 0; k< sizeof(primes)/sizeof(primes[0]); k++) {
             const int32_t p = primes[k];
             int32_t h = 5;//p>>16;
-            while (jacobi(h, p)!=-1) h++;
+            while (jacobi(h, p)!=-1 /* || gcd(h,p-1)!=1 || gcd(h,p+1)==1 */) h++;
             // h = generate_quadratic_non_residue(3, (uint32_t)p);
             int32_t g = h;
             //printf("mwc32s prime=%08x gen=%d\n",(uint32_t)p, g);
@@ -1137,7 +1351,7 @@ int main(int argc, char **argv){
         }
         return 0;
     }
-    if (1) {// montgomery test
+    if (0) {// montgomery test
         uint32_t p = primes[0];
         uint32_t pi = -mod_inverse(p); 
         uint32_t qinv=4236238847;
@@ -1162,7 +1376,8 @@ int main(int argc, char **argv){
         }
         return 0;
     }
-    if (1) {// soup test
+    if (0) {// soup test
+        printf("Soup modular reduction\n");
         for (int k = 13; k< sizeof(primes)/sizeof(primes[0]); k++) {
             uint32_t p = primes[k];
             for (uint32_t a =p+0xFFFF; a>0; a--){
@@ -1179,7 +1394,78 @@ int main(int argc, char **argv){
         }
 
     }
-    if (1) {
+    if (1) {// NTT reference implementation
+        printf("NTT test\n");
+        uint32_t a[256];
+        uint32_t c[256];
+        uint32_t t[256];
+        uint32_t r[256];
+        uint32_t wv[256]; // вектор корня степени N в bit-reversed order
+        uint32_t vv[256]; // вектор корня степени N в bit-reversed order
+        unsigned int n = 256;
+        int res;
+        int s = __builtin_clz(n-1);
+        for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++) {
+            for (int i=0; i<n; i++){// заполнение векторов
+                a[i] = i;
+                c[i] = 0;
+            }
+
+            uint32_t p = primes[k];
+
+            if (p%(n+n)!=1) continue;
+            uint32_t g = ntt_root(n, p);
+            uint32_t g_= INVM(g, p);// g^{-1}
+            uint32_t w = SQRM(g, p);
+            uint32_t w_= SQRM(g_, p);// w^{-1}
+
+            ntt_precompute_rev(wv, g, n, p);// расчет вектора степеней корня степени N в bit-reversed order для применения в NTT
+            ntt_precompute_rev(vv, g_, n, p);
+            if (0){
+                for (int i=0; i<n; i++){// проверка результата
+                    printf("%x ", wv[i]);
+                }
+                printf("\n");
+            }
+            printf("prime=%08x g=%8x w=%8x %4s ",p, g, w, 
+                MULM(w, w_, p)==1 && POWM(w, n, p)==1 && POWM(w_, n, p)==1?"pass":"fail");
+            poly_gamma(a, g, n, p);
+            NTT_ref(c, a, w, n, p);
+            if (0) {
+                for (int i=0; i<n; i++){// проверка результата
+                    printf("%x ", c[i]);
+                }
+                printf("\n");
+            }
+            invNTT_ref(a, c, w_, n, p);
+            poly_gamma(a, g_, n, p);
+            res = 1;
+            for (int i=0; i<n; i++){// проверка результата
+                res = res && (a[i]==i);
+            }
+            printf("..%s ", res?"ok":"fail");
+            NTT_nw_ref(c, a, g, n, p);
+            NTT(a, wv, n, p);
+            res = 1;
+            for (unsigned int i=0; i<n; i++){// проверка результата
+                res = res && (a[RevBits(i)>>s]==c[i]);
+            }
+            printf("%4s ", res?"pass":"fail");
+            invNTT(a, vv, n, p);
+            
+            //invNTT_nw_ref(a, c, g_, n, p);
+            res = 1;
+            for (int i=0; i<n; i++){// проверка результата
+                res = res && (a[i]==i);
+            }
+            printf("..%s\n", res?"ok":"fail");
+        }
+    }
+    if (1) {// Умножение полиномов методом NTT
+        printf("poly mul\n"); 
+
+    }
+    if (1) {// Поиск корней из единицы для простых чисел
         uint32_t g=3;
         while (gcd(g, Q0 - 1) != 1) g++;
         int len = mwc32_period(A0);
@@ -1246,15 +1532,7 @@ int main(int argc, char **argv){
             printf("k-th root %x\n", omega);
         return 0;
     }
-    if (1) {
-        uint32_t q0 = 8380417;
-        int len = mwc32_length(1, q0);
-        printf("Prime %08x, order %08x %s\n", q0, len, len==(q0/2-1)?"..ok":"");
-        for (int i=0; i<=255; i++){
-            uint32_t a = POWM(2, i, q0);
-            // printf("%02x: %08x\n", i, a);
-        }
-    }
+
     if (1) {// найти сдвиговые константы
         uint32_t A1 = (0xFF80u);// период повтора 7fbffffe `-16`
         uint32_t Q1 = (A1<<16)-1; 
