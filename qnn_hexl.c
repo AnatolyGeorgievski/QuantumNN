@@ -855,6 +855,67 @@ void ntt_precompute(uint32_t* r, uint32_t gamma, unsigned int N, uint32_t q) {
         r[i] = g;
     }
 }
+
+static int jacobi(uint64_t a, uint64_t m);
+/*! \brief Поиск корня степени 2N= 2^s по модулю простого числа q
+    \param N степень полинома (x^N + 1)
+    \param q простое число, нечетное $q = 1 mod 2N$
+    \return (r^2)^N = 1 mod q
+ */
+uint32_t ntt_root(uint32_t N, uint32_t q){
+    uint32_t gen =  3;// выбор генератора - квадратичный не-вычет
+    while (jacobi(gen,q)!=-1) gen++;
+    uint32_t r = gen;
+    do {
+        while ( POWM(r, N+N, q)!=1)
+            r = MULM(r, gen, q);
+    } while (POWM(r, N, q)==1);
+    return r;
+}
+
+#define BIT(x,n) (((x)>>(n))&1)
+#define SWAP(x,y) do {    \
+   __typeof__(x) _x = x;  \
+   __typeof__(y) _y = y;  \
+   x = _y;                \
+   y = _x;                \
+ } while(0)
+/*! \brief Jacobi symbol 
+    \param a - произвольное целое число
+    \param m - положительное целое число, нечетное и не равное 1
+    \return 1, если a является квадратичным вычетом по модулю m 
+    (существует целое число x такое, что x^2 ≡ a (mod m)), 
+    -1, если a является квадратичным невычетом по модулю m, 
+    0, если a кратно m.
+
+    Свойства
+    jacobi(a,m) = jacobi(b,m) если a = b (mod m)
+    jacobi(a,m) = 0, если a кратно m (gcd(a,m) \neq 1)
+    jacobi(a,m) = jacobi(a, m/a) если a нечётно и a кратно m
+    
+    Си́мвол Яко́би — теоретико-числовая функция двух аргументов, введённая К. Якоби в 1837 году. 
+    Является квадратичным характером в кольце вычетов.
+    
+    Символ Якоби обобщает символ Лежандра на все нечётные числа, большие единицы.
+ */
+static int jacobi(uint64_t a, uint64_t m) 
+{
+	a = a%m;
+	int t = 1;
+	unsigned m1= BIT(m,1);
+	while (a!=0){
+		int z = __builtin_ctzll(a);
+		a = a>>z;
+		unsigned a1= BIT(a,1);
+		if((BIT(z,0)&(m1^BIT(m,2))) ^ (a1&m1)) t = -t;
+		SWAP(a,m);
+		m1= a1;
+		a = a%m;
+	}
+	if (m!=1) return 0;
+	return t;
+}
+
 /*! \brief Специальный вид инверсии для алгоритма редуцирования $\lfloor (2^{64}-q)/q \rfloor$ */
 static inline uint64_t INVL128(uint64_t v) {
     return ((unsigned __int128)(-v)<<64)/v;
@@ -901,6 +962,7 @@ uint32_t mwc32u_next(uint32_t h, const uint32_t A){
     if (r > (A<<16)) r+= (A<<16)+1;
     return r;
 }
+#if defined(TEST_NTT)
 
 uint32_t mwc32_hash_16(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
     h += d;
@@ -915,8 +977,6 @@ uint32_t mwc32_hash_16(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
     \param a - константа $a < 2^{16}$
     \return $h*a + d \mod q$
  */
-
-#if 1
 
 /*! \brief вычисляем константу для замены A/B == ((A*C0)>>32 + A)>>(n-32)
  */
@@ -1033,48 +1093,6 @@ uint32_t mwc32_gen(uint32_t gen, uint32_t P){
     return gen;
 }
 
-#define BIT(x,n) (((x)>>(n))&1)
-#define SWAP(x,y) do {    \
-   typeof(x) _x = x;      \
-   typeof(y) _y = y;      \
-   x = _y;                \
-   y = _x;                \
- } while(0)
-/*! \brief Jacobi symbol 
-    \param a - произвольное целое число
-    \param m - положительное целое число, нечетное и не равное 1
-    \return 1, если a является квадратичным вычетом по модулю m 
-    (существует целое число x такое, что x^2 ≡ a (mod m)), 
-    -1, если a является квадратичным невычетом по модулю m, 
-    0, если a кратно m.
-
-    Свойства
-    jacobi(a,m) = jacobi(b,m) если a = b (mod m)
-    jacobi(a,m) = 0, если a кратно m (gcd(a,m) \neq 1)
-    jacobi(a,m) = jacobi(a, m/a) если a нечётно и a кратно m
-    
-    Си́мвол Яко́би — теоретико-числовая функция двух аргументов, введённая К. Якоби в 1837 году. 
-    Является квадратичным характером в кольце вычетов.
-    
-    Символ Якоби обобщает символ Лежандра на все нечётные числа, большие единицы.
- */
-int jacobi(uint64_t a, uint64_t m) 
-{
-	a = a%m;
-	int t = 1;
-	unsigned m1= BIT(m,1);
-	while (a!=0){
-		int z = __builtin_ctzll(a);
-		a = a>>z;
-		unsigned a1= BIT(a,1);
-		if((BIT(z,0)&(m1^BIT(m,2))) ^ (a1&m1)) t = -t;
-		SWAP(a,m);
-		m1= a1;
-		a = a%m;
-	}
-	if (m!=1) return 0;
-	return t;
-}
 /*! выбор генератора - квадратичный не-вычет 
 
     \see (https://eprint.iacr.org/2012/470.pdf) 
@@ -1088,21 +1106,7 @@ uint32_t generate_quadratic_non_residue(uint32_t gen, uint32_t P){
     while (jacobi(gen,P)!=-1) gen++;
     return gen;
 }
-/*! \brief Поиск корня степени 2N= 2^s по модулю простого числа q
-    \param N степень полинома (x^N + 1)
-    \param q простое число, нечетное $q = 1 mod 2N$
-    \return (r^2)^N = 1 mod q
- */
-uint32_t ntt_root(uint32_t N, uint32_t q){
-    uint32_t gen =  3;// выбор генератора - квадратичный не-вычет
-    while (jacobi(gen,q)!=-1) gen++;
-    uint32_t r = gen;
-    do {
-        while ( POWM(r, N+N, q)!=1)
-            r = MULM(r, gen, q);
-    } while (POWM(r, N, q)==1);
-    return r;
-}
+
 /*! \brief Простые числа вида 2^W - A 2^N + 1 
     https://www.rieselprime.de/ziki/Proth_prime
     https://en.wikipedia.org/wiki/Proth_prime
