@@ -8,17 +8,7 @@ qnn_protobuf.c
 #include "qnn_protobuf.h"
 #include <glib.h>
 
-typedef struct  _message_pb message_t;
-struct _message_pb {
-	const char *name;	// 
-	uint16_t field_num	:16;//! 0..8192 - контекстный идентификатор
-	uint8_t  type   :4;	//!< тип данных BASE (3 бита) + ARRAY (типизованные массивы)
-	uint8_t	 flags	:4; // optional required repeated
-  union {
-    struct _message_pb* ref;//!< ссылка на сообщение(список полей)
-//    union _Value default_value;
-  };
-};
+
 #define _OPT     0  //!< опциональный
 #define _REP     1  //!< последовательность
 #define _REQ     2  //!< обязательный
@@ -39,7 +29,6 @@ enum { // упорядочить как в iot_*.h
     _CHOICE
 };
 
-enum {PB_NULL, PB_UINT, PB_INT, PB_FLOAT, PB_DOUBLE, PB_STRING, PB_OBJECT, PB_CHOICE};
 #define proto_new(typ)  ({Protobuf_t * pb = g_slice_alloc0(sizeof(Protobuf_t)); pb->type = typ; pb;})
 static 
 const message_t* qnn_proto_oneof(const message_t* m, uint32_t  id){
@@ -57,7 +46,16 @@ const message_t* qnn_proto_type(const message_t* m, uint32_t id){
     }
     return m;
 }
-GSList * qnn_proto_decode( uint8_t *buf, size_t size, uint8_t ** tail, const message_t* msg,  int level)
+/*! \brief декодирование сообщения в структуру Protobuf
+    \param buf - указатель на буфер с данными
+    \param size - размер буфера
+    \param tail - указатель конец разбора с остатком данных 
+    \param msg - указатель на структуру сообщения в кодировке protobuf
+    \param level - уровень вложенности
+    \return указатель на структуру Protobuf (список элементов)
+ */
+GSList * qnn_proto_decode( uint8_t *buf, size_t size, uint8_t ** tail, 
+        const message_t* msg,  int level)
 {
     uint8_t *s = buf;
     GSList* list = NULL; 
@@ -506,7 +504,8 @@ message_t MainProto [] = {
   {"opset_import", 8, _STRUCT, .ref=OperatorSetIdProto},
   {NULL}
 };
-
+/*! \brief отладочная печать структуры Protobuf
+ */
 void qnn_proto_print(GSList* list){
     while (list){
         Protobuf_t* pb = (Protobuf_t*) list->data;
