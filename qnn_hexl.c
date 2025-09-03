@@ -71,6 +71,12 @@ https://eprint.iacr.org/2012/470.pdf
 #define Q_PRIME (((0xFFA0u)<<16)-1)
 // Barrett constant u = ⌊(2^64 - q)/q⌋
 #define U_BARRETT ((uint32_t)(((uint64_t)(-Q_PRIME) << 32) / Q_PRIME))
+/*! \brief Специальный вид инверсии для алгоритма редуцирования $\lfloor (2^{64}-q)/q \rfloor$ 
+    Ur = 2^{32}+INVL(q);
+ */
+static inline uint32_t INVL(uint32_t v) {
+    return ((unsigned __int64)(-v)<<32)/v;
+}
 
 #ifdef __AVX512F__
 typedef uint32_t uint32x16_t __attribute__((__vector_size__(64)));
@@ -149,12 +155,9 @@ static inline __m512i _mulm(__m512i a, __m512i b, __m512i q, __m512i u){
     __m512i d1 = _mm512_mul_epu32(_mm512_srli_epi64(a,32), _mm512_srli_epi64(b,32));
     d0 =  _barret(d0, q, u);
     d1 =  _barret(d1, q, u);
-    return _mm512_unpacklo_epi32(d0, d1);
-}
-static inline __m512i _macm(__m512i a, __m512i b, __m512i c, __m512i q, __m512i u){
-    //a = _mm512_madd52lo_epu64(a, b, c);// a+ b*c
-    a = _mm512_add_epi64(a, _mm512_mul_epu32(b,c));
-    return _barret(a, q, u);
+    return _mm512_mask_blend_epi32((__mmask16)0xaaaau, d0, _mm512_slli_epi64(d1,32));
+//    return _mm512_mask_shuffle_epi32(d0, (__mmask16)0xaaaau, d1, 0x80); 
+//    return _mm512_unpacklo_epi32(d0, d1);
 }
 /*! \brief Square modulo q 
     \param a - first operand
@@ -168,7 +171,9 @@ static inline __m512i _sqrm(__m512i a, __m512i q, __m512i u){
     b = _mm512_mul_epu32(b, b);
     a = _barret(a, q, u);
     b = _barret(b, q, u);
-    return _mm512_unpacklo_epi32(a, b);
+    return _mm512_mask_blend_epi32((__mmask16)0xaaaau, a, _mm512_slli_epi64(b,32));
+//    return _mm512_mask_shuffle_epi32(a, (__mmask16)0xaaaau, b, 0x80); 
+//    return _mm512_unpacklo_epi32(a, b);
 }
 
 /*! \brief Element-wise polynomial multiplication modulo q.
@@ -178,49 +183,70 @@ static inline __m512i _sqrm(__m512i a, __m512i q, __m512i u){
 
     \note Processes 16 coefficients at a time using AVX512, for polynomials in R_q = Z_q[x]/(x^{256} + 1).
  */
-void poly_mulm(const uint32_t *a, const uint32_t *b, uint32_t *result) {
-    __m512i q = _mm512_set1_epi32(Q_PRIME);
-    __m512i u = _mm512_set1_epi64(U_BARRETT);
-    for (int i = 0; i < 256; i += 16) {
+static inline 
+void poly_mulm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
+    const uint32_t Ur = INVL(p);
+    __m512i q = _mm512_set1_epi32(p);
+    __m512i q_= _mm512_set1_epi64(p);
+    __m512i u = _mm512_set1_epi64(Ur);
+    for (int i = 0; i < N; i += 16) {
         __m512i va = _mm512_loadu_epi32((const void *)(a + i));
         __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
-        __m512i vr = _mulm(va, vb, q, u);// алгоритм умножения по модулю работает с числами 64 бита.
+        __m512i vr = _mulm(va, vb, q_, u);// алгоритм умножения по модулю работает с числами 64 бита.
         _mm512_storeu_epi32(result + i, vr);
     }
 }
-static inline void poly_mulm_u(const uint32_t *a, const uint32_t b, uint32_t *result) {
-    __m512i q = _mm512_set1_epi32(Q_PRIME);
-    __m512i u = _mm512_set1_epi64(U_BARRETT);
+static inline 
+void poly_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int N, const uint32_t p) {
+    const uint32_t Ur = INVL(p);
+    __m512i q  = _mm512_set1_epi32(p);
+    __m512i q_ = _mm512_set1_epi64(p);
+    __m512i u  = _mm512_set1_epi64(Ur);
     __m512i vb = _mm512_set1_epi32(b);
-    for (int i = 0; i < 256; i += 16) {
+    for (int i = 0; i < N; i += 16) {
         __m512i va = _mm512_loadu_epi32((const void *)(a + i));
-        __m512i vr = _mulm(va, vb, q, u);// алгоритм умножения по модулю работает с числами 64 бита.
-        _mm512_storeu_epi32(result + i, vr);
+        __m512i vr = _mulm(va, vb, q_, u);// алгоритм умножения по модулю работает с числами 64 бита.
+        _mm512_storeu_epi32(r + i, vr);
     }
 }
 /*! \brief Element-wise polynomial addition modulo q.
-    \param a First polynomial (array of 256 uint32_t coefficients).
-    \param b Second polynomial (array of 256 uint32_t coefficients).
-    \param result Output polynomial (array of 256 uint32_t coefficients).
+    \param r Output polynomial (array of N coefficients).
+    \param a First  polynomial
+    \param b Second polynomial
+    \param N power of 2
+    \param p prime
     
     \note Processes 16 coefficients at a time using AVX512, for polynomials in R_q = Z_q[x]/(x^{256} + 1).
  */
-static inline void poly_addm(const uint32_t *a, const uint32_t *b, uint32_t *result) {
-    __m512i q = _mm512_set1_epi32(Q_PRIME);
-    for (int i = 0; i < 256; i += 16) {
+static inline 
+void poly_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t p) {
+    __m512i q = _mm512_set1_epi32(p);
+    for (int i = 0; i < N; i += 16) {
         __m512i va = _mm512_loadu_epi32((const void *)(a + i));
         __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
         __m512i vr = _addm(va, vb, q);
-        _mm512_storeu_epi32(result + i, vr);
+        _mm512_storeu_epi32(r + i, vr);
+    }
+}
+static inline 
+void poly_subm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t p) {
+    __m512i q = _mm512_set1_epi32(p);
+    for (int i = 0; i < N; i += 16) {
+        __m512i va = _mm512_loadu_epi32((const void *)(a + i));
+        __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
+        __m512i vr = _subm(va, vb, q);
+        _mm512_storeu_epi32(r + i, vr);
     }
 }
 /*! \brief ротация полинома (b) по модулю (x^N + 1) и сложение с полином (a)
-    \param a First polynomial (array of 256 uint32_t coefficients).
-    \param b Second polynomial (array of 256 uint32_t coefficients).
-    \param r Output polynomial (array of 256 uint32_t coefficients).
+    \param r Output polynomial (array of N coefficients).
+    \param a First  polynomial
+    \param b Second polynomial
+    \param N power of 2
+    \param p prime
  */
-static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_t *r, const unsigned int N) {
-    __m512i q = _mm512_set1_epi32(Q_PRIME);
+static inline void poly_xtime_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t p) {
+    __m512i q = _mm512_set1_epi32(p);
     __m512i c = _mm512_loadu_epi32((const void *)(b + N-16)); // перенос
     c = _mm512_sub_epi32(q, c);         // c = q - c
     for (int i = 0; i < N; i += 16) {
@@ -273,16 +299,18 @@ static inline void poly_xtime_subm(const uint32_t *a, const uint32_t *b, uint32_
     \param r Output polynomial (array of 256 uint32_t coefficients).
     \param N степень полинома (x^N + 1)
  */
-static inline void poly_xtime_madd(const uint32_t *a, const uint32_t b, uint32_t *r, const unsigned int N) {
-    __m512i q = _mm512_set1_epi32(Q_PRIME);
-    __m512i u = _mm512_set1_epi64(U_BARRETT);
+static inline void poly_xtime_madd(uint32_t *r, const uint32_t *a, const uint32_t b,  const unsigned int N, uint32_t p) {
+    const uint32_t Ur = INVL(p);
+    __m512i q = _mm512_set1_epi32(p);
+    __m512i q_= _mm512_set1_epi64(p);// это первое отличие
+    __m512i u = _mm512_set1_epi64(Ur);
     __m512i vb= _mm512_set1_epi32(b);
     __m512i c = _mm512_loadu_epi32((const void *)(r + N-16)); // перенос
     c = _mm512_sub_epi32(q, c);// операция выполняется для полинома (x^N+1), для (x^N-1) не нужна
     for (int i = 0; i < N; i += 16) {// если N=256
         __m512i va = _mm512_loadu_epi32((const void *)(a + i)); 
         __m512i vr = _mm512_loadu_epi32((const void *)(r + i));
-        va = _mulm(va, vb, q, u);
+        va = _mulm(va, vb, q_, u);
         c  = _mm512_alignr_epi32 (vr,c, 15);
         va = _addm(va, c, q);
         _mm512_storeu_epi32(r + i, va);
@@ -332,30 +360,44 @@ static inline __m256i _mulm_avx2(__m256i a, __m256i b, __m256i q, __m256i u){
     __m256i d1 = _mm256_mul_epu32(_mm256_srli_epi64(a, 32), _mm256_srli_epi64(b,32));
     d0 = _barret_avx2(d0, q, u);
     d1 = _barret_avx2(d1, q, u);
-    return _mm256_unpacklo_epi32(d0, d1);
+    return _mm256_blend_epi32 (d0, _mm256_slli_epi64(d1,32), 0xaa);
 }
 /*! \brief Element-wise polynomial multiplication modulo q.
-    \param a First polynomial (array of 256 uint32_t coefficients).
-    \param b Second polynomial (array of 256 uint32_t coefficients).    
-    \param result Output polynomial (array of 256 uint32_t coefficients).
+    \param r Output polynomial (array of N coefficients).
+    \param a First  polynomial
+    \param b Second polynomial
     
     \note Processes 8 coefficients at a time using AVX2, for polynomials in R_q = Z_q[x]/(x^{256} + 1).
  */
-static inline void poly_mulm(const uint32_t *a, const uint32_t *b, uint32_t *result) {
-    __m256i q = _mm256_set1_epi32(Q_PRIME);
-    __m256i u = _mm256_set1_epi64x(U_BARRETT);
-    for (int i = 0; i < 256; i += 8) {
+static inline void poly_mulm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
+    uint32_t Ur = INVL(p);
+    __m256i q = _mm256_set1_epi32(p);
+    __m256i q_= _mm256_set1_epi64x(p);
+    __m256i u = _mm256_set1_epi64x(Ur);
+    for (int i = 0; i < N; i += 8) {
         __m256i va = _mm256_loadu_si256((__m256i *)(a + i));
         __m256i vb = _mm256_loadu_si256((__m256i *)(b + i));
-        __m256i vr = _mulm_avx2(va, vb, q, u);
+        __m256i vr = _mulm_avx2(va, vb, q_, u);
+        _mm256_storeu_si256((__m256i *)(result + i), vr);
+    }
+}
+static inline void poly_mulm_u(uint32_t *result, const uint32_t *a, const uint32_t b, unsigned int N, uint32_t p) {
+    uint32_t Ur = INVL(p);
+    __m256i q = _mm256_set1_epi32(p);
+    __m256i q_= _mm256_set1_epi64x(p);
+    __m256i u = _mm256_set1_epi64x(Ur);
+    __m256i vb= _mm256_set1_epi32(b);
+    for (int i = 0; i < N; i += 8) {
+        __m256i va = _mm256_loadu_si256((__m256i *)(a + i));
+        __m256i vr = _mulm_avx2(va, vb, q_, u);
         _mm256_storeu_si256((__m256i *)(result + i), vr);
     }
 }
 /*! редуцирование (b) и сложение полиномов x^N + 1
 N = 256 
  */
-static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_t *r, unsigned int N) {
-    __m256i q = _mm256_set1_epi32(Q_PRIME);
+static inline void poly_xtime_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
+    __m256i q = _mm256_set1_epi32(p);
     __m256i c = _mm256_loadu_si256((__m256i *)(b + 256-8)); // перенос
     c = _mm256_sub_epi32(q, c);         // c = q - c
     for (int i = 0; i < 256; i += 8) {
@@ -375,16 +417,18 @@ static inline void poly_xtime_addm(const uint32_t *a, const uint32_t *b, uint32_
     \param N степень полинома
  */
 static inline 
-void poly_xtime_madd(const uint32_t *a, const uint32_t b, uint32_t *r, unsigned int N) {
-    __m256i q = _mm256_set1_epi32 (Q_PRIME);
-    __m256i u = _mm256_set1_epi64x(U_BARRETT);
+void poly_xtime_madd(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int N, uint32_t p) {
+    uint32_t Ur = INVL(p);
+    __m256i q = _mm256_set1_epi32 (p);
+    __m256i q_= _mm256_set1_epi64x(p);
+    __m256i u = _mm256_set1_epi64x(Ur);
     __m256i vb= _mm256_set1_epi32 (b);
     __m256i c = _mm256_loadu_si256((__m256i *)(r + 256-8)); // перенос
     for (int i = 0; i < N; i += 8) {
         __m256i va = _mm256_loadu_si256((__m256i *)(a + i));
         __m256i vr = _mm256_loadu_si256((__m256i *)(r + i));
-        va = _mulm_avx2(va, vb, q, u);
-        c  = _mm256_alignr_epi32 (vr,c, 7);// уточнить
+        va = _mulm_avx2(va, vb, q_, u);
+        c  = _mm256_alignr_epi32 (vr,c, 7);
         va = _addm_avx2(va, c, q);
         _mm256_storeu_si256((__m256i *)(r + i), va);
         c = vr;
@@ -398,9 +442,8 @@ void poly_xtime_madd(const uint32_t *a, const uint32_t b, uint32_t *r, unsigned 
     
     \note Processes 8 coefficients at a time using AVX2, for polynomials in R_q = Z_q[x]/(x^{N} + 1).
  */
-static inline 
-void poly_addm(const uint32_t *a, const uint32_t *b, uint32_t *result, unsigned int N) {
-    __m256i q = _mm256_set1_epi32(Q_PRIME);
+static inline void poly_addm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
+    __m256i q = _mm256_set1_epi32(p);
     for (int i = 0; i < N; i += 8) {
         __m256i va = _mm256_loadu_si256((__m256i *)(a + i));
         __m256i vb = _mm256_loadu_si256((__m256i *)(b + i));
@@ -413,9 +456,10 @@ void poly_addm(const uint32_t *a, const uint32_t *b, uint32_t *result, unsigned 
     \param b Second polynomial (array of 256 uint32_t coefficients).    
     \param result Output polynomial (array of 256 uint32_t coefficients).
     \param N степень полинома (x^N + 1)
+    \param p модуль простого числа
  */
-static inline void poly_subm(const uint32_t *a, const uint32_t *b, uint32_t *result, unsigned int N) {
-    __m256i q = _mm256_set1_epi32(Q_PRIME);
+static inline void poly_subm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
+    __m256i q = _mm256_set1_epi32(p);
     for (int i = 0; i < N; i += 8) {
         __m256i va = _mm256_loadu_si256((__m256i *)(a + i));
         __m256i vb = _mm256_loadu_si256((__m256i *)(b + i));
@@ -426,14 +470,8 @@ static inline void poly_subm(const uint32_t *a, const uint32_t *b, uint32_t *res
 #endif
 
 /*! \defgroup _modular_math Группа методов для тестирования, не использует явную векторизацию.
- \{
+    \{
  */
-/*! \brief Специальный вид инверсии для алгоритма редуцирования $\lfloor (2^{64}-q)/q \rfloor$ 
-    Ur = 2^{32}+INVL(q);
- */
-static inline uint32_t INVL(uint32_t v) {
-    return ((unsigned __int64)(-v)<<32)/v;
-}
 static inline uint32_t MULM(uint32_t a, uint32_t b, uint32_t q) {
     return ((unsigned __int64)a*b)%q;
 }
@@ -461,6 +499,23 @@ static inline uint32_t MODB(uint64_t a, uint32_t q, uint32_t U) {
     uint64_t c4 = a - q*(c2>>32);
     return  (c4>= q)? c4 - q: c4;
 }
+/*! \brief Возведение в степень по модулю $b^a (\mod q)$ */
+static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
+{
+	uint32_t r = b;
+	uint32_t s = 1;
+    while (a!=0) {
+		if (a&1) 
+			s = ((uint64_t)s*r)%q;
+		r = ((uint64_t)r*r)%q;
+		a>>=1;
+	}
+	return s;
+}
+static inline uint32_t INVM(uint32_t a, const uint32_t q){
+    return POWM(a, q-2, q);
+}
+//!\}
 /* Shoup modular multiplication. The most time-consuming primitive in NTT algorithms
 is modular multiplication between the coefficients of a and the fixed (precomputed)
 powers of ω. */
@@ -499,7 +554,7 @@ uint32_t  mont_modm(uint64_t z, uint32_t q, uint64_t p){
     if (z>=q) z-=q;
     return  (uint32_t)z;
 }
-// Функция для вычисления q^{-1} mod 2^32
+/*! \brief Функция для вычисления q^{-1} mod 2^{32} */
 uint32_t mod_inverse(uint32_t q) {
     uint32_t q_inv = 1;
     for (int i = 1; i < 32; i++) {
@@ -584,55 +639,52 @@ uint32_t convert_f32_to_lwe_(float f, const uint32_t *K, const uint32_t *Kr, uin
     */
     return m;    // умножение на сдвиговую константу по модулю `q`
 }
-static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
-{
-	uint32_t r = b;
-	uint32_t s = 1;
-    while (a!=0) {
-		if (a&1) 
-			s = ((uint64_t)s*r)%q;
-		r = ((uint64_t)r*r)%q;
-		a>>=1;
-	}
-	return s;
-}
-static inline uint32_t INVM(uint32_t a, const uint32_t q){
-    return POWM(a, q-2, q);
-}
 
-uint32_t RevBits(uint32_t x);
+
+void vec_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q);
+/*! \brief Cooley-Tukey batterfly векторный вариант "бабочки" */
+static void NTT_CT_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q);
+/*! \brief Gentleman-Sande batterfly векторный вариант "бабочки" */
+static void NTT_GS_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q);
 /*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
     \param a First polynomial (array of 256 uint32_t coefficients). return NTT(a) in bit-reversed order.
     \param gamma store powers of gamma in bit-reverse ordering
     \param N power of 2
     \param q prime modulus $q \equiv 1 \mod 2N$
 
-
     * [2012.01968](https://arxiv.org/pdf/2012.01968)
     * [2103.16400](https://arxiv.org/pdf/2103.16400) 
     * [2024/585](https://eprint.iacr.org/2024/585.pdf) 
 */
 uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
-    unsigned int i, j, m;
-    uint32_t t;
-    t = N;
-    for (m = 1; m < N; m = 2*m) {
-        t = t/2;
-        for (i=0; i<m; i++) {
-            unsigned j_1 = 2*i*t;
-            unsigned j_2 = j_1 + t;
+    unsigned int i, j, k, m, n;
+    n = N/2;
+    for (m = 1; m < N; m = 2*m, n = n/2) {
+        for (i=0, k=0; i<m; i++, k+=2*n) {
             uint32_t w = gamma[m+i];
-            for (j = j_1; j < j_2; j++) {
-                uint32_t x_0 = a[j];
-                uint32_t x_1 = a[j+t];
-                //printf("%d-%d ", j, j+t);
-                uint32_t wx = MULM(x_1, w, q);
-                a[j]   = ADDM(x_0, wx, q);
-                a[j+t] = SUBM(x_0, wx, q);
-            }
-            //printf("ntt-gamma[%d]=%x\n", m+i, w);
+            NTT_CT_butterfly(a+k, a+k+n, w, n, q);
         }
     }
+    return a;
+}
+/*! \brief Gentleman-Sande (GS) Radix-2 InvNTT 
+    \param a First polynomial $a = (a_0, a_1, ..., a_{N-1})$ array of 256 uint32_t coefficients in bit-reverse ordering).
+    \param gamma store powers of $\gamma^{-1}$ in bit-reverse ordering
+    \param N power of 2
+    \param N_inv inverse of N modulo $q$
+    \param q prime modulus satisfying $q \equiv 1 \mod 2N$
+ */
+uint32_t* invNTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
+    unsigned int i, j, k, m, n;
+    n = 1;
+    for (m = N/2; m > 0; m = m/2, n=n*2) {
+        for (i=0, k=0; i<m; i++, k+=2*n) {
+            uint32_t w = gamma[m+i];
+            NTT_GS_butterfly(a+k, a+k+n, w, n, q);
+        }
+    }
+    uint32_t N_inv = INVM(N, q);
+    vec_mulm_u(a, a, N_inv, N, q);
     return a;
 }
 /*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
@@ -747,82 +799,85 @@ void invNTT_nw_ref(uint32_t* r, const uint32_t *a, const uint32_t gamma, unsigne
         g    = MULM(g, g2, q);
     }
 }
-/*! \brief Gentleman-Sande (GS) Radix-2 InvNTT 
-    \param a First polynomial $a = (a_0, a_1, ..., a_{N-1})$ array of 256 uint32_t coefficients in bit-reverse ordering).
-    \param gamma store powers of $\gamma^{-1}$ in bit-reverse ordering
-    \param N power of 2
-    \param N_inv inverse of N modulo $q$
-    \param q prime modulus satisfying $q \equiv 1 \mod 2N$
- */
-uint32_t* invNTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
-    unsigned int i, j, k, m;
-    unsigned int t, j_1, j_2;
-    t = 1;
-    for (m = N; m > 1; m = m/2) {
-        j_1 = 0;
-        unsigned int h = m/2;
-        for (i=0; i<h; i++) {
-            j_2 = j_1 + t;
-            uint32_t w = gamma[h+i];
-            for (j = j_1; j < j_2; j++) {
-                uint32_t x_0 = a[j];
-                uint32_t x_1 = a[j+t];
-                a[j]   = ADDM(x_0, x_1, q);
-                a[j+t] = MULM(SUBM(x_0, x_1, q), w, q);
-            }
-            j_1 = j_1 + 2*t;
-        }
-        t = t*2;
-    }
-    uint32_t N_inv = INVM(N, q); //8347681 = 256^{-1} mod q
-    for (j = 0; j < N; j++) {// эту операцию совместить со следующей
-        a[j] = MULM(a[j], N_inv, q);
-    }
-    return a;
+/*! \brief Element-wise multiplication of two vectors modulo q 
+    \param r результат умножения
+    \param a первый вектор
+    \param b второй вектор
+    \param N размер векторов
+    \param q prime modulus
+*/
+void vec_mulm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t q){
+    for (int i=0; i<N; i++)
+        r[i] = MULM(a[i], b[i], q);
 }
-uint8_t RevBits8(uint8_t x){
+void vec_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q){
+    for (int i=0; i<N; i++)
+        r[i] = MULM(a[i], b, q);
+}
+void vec_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t q){
+    for (int i=0; i<N; i++)
+        r[i] = ADDM(a[i], b[i], q);
+}
+void vec_subm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t q){
+    for (int i=0; i<N; i++)
+        r[i] = SUBM(a[i], b[i], q);
+}
+
+/*! \brief умножение полиномов в кольце $\mathbb{Z}_q[x]/(x^N + 1)$ с использованием NTT 
+    \param r результат умножения
+    \param a первый полином, заменяется на результат NTT
+    \param b второй полином, заменяется на результат NTT
+    \param gamma store powers of $\gamma^i$ in bit-reverse ordering
+    \param r_gamma store powers of $\gamma^{-i}$ in bit-reverse ordering
+    \param N power of 2
+    \param q prime modulus satisfying $q \equiv 1 \mod 2N$
+
+    \note gamma - корень степени 2N из единицы
+ */
+void NTT_mul(uint32_t *r, uint32_t *a, uint32_t *b, const uint32_t *gamma, const uint32_t *r_gamma, unsigned int N, uint32_t q)
+{
+    NTT(a, gamma, N, q);
+    NTT(b, gamma, N, q);
+    vec_mulm(r, a, b, N, q);
+    invNTT(r, r_gamma, N, q);
+}
+/*! \brief умножение полиномов в кольце $\mathbb{Z}_q[x]/(x^N + 1)$ без использования NTT */
+void poly_mul(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t q)
+{
+    poly_mulm_u(r, a, b[N-1], N, q);
+    for (int i = N-2; i>=0; i--)
+        poly_xtime_madd(r, a, b[i], N, q);
+}
+static
+void NTT_CT_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q) {
+    uint32_t w[n];
+    vec_mulm_u(w, b, g, n, q);
+    vec_subm(b, a, w, n, q);
+    vec_addm(a, a, w, n, q);
+}
+static 
+void NTT_GS_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q) {
+    uint32_t w[n];
+    vec_subm(w, a, b, n, q);
+    vec_addm(a, a, b, n, q);
+    vec_mulm_u(b, w, g, n, q);
+}
+
+/*! \brief Обратный битовый порядок для 8 битных чисел */
+static uint8_t RevBits8(uint8_t x){
     x = ((x & 0x55) << 1) | ((x & 0xAA) >> 1);
     x = ((x & 0x33) << 2) | ((x & 0xCC) >> 2);
     x = ((x & 0x0F) << 4) | ((x & 0xF0) >> 4);
     return x;
 }
-uint32_t RevBits(uint32_t x){
+/*! \brief Обратный битовый порядок для 32 битных чисел */
+static uint32_t RevBits(uint32_t x){
     x = ((x & 0x55555555) << 1) | ((x & 0xAAAAAAAA) >> 1);
     x = ((x & 0x33333333) << 2) | ((x & 0xCCCCCCCC) >> 2);
     x = ((x & 0x0F0F0F0F) << 4) | ((x & 0xF0F0F0F0) >> 4);
     x = ((x & 0x00FF00FF) << 8) | ((x & 0xFF00FF00) >> 8);
     x = ((x & 0x0000FFFF) <<16) | ((x & 0xFFFF0000) >>16);
     return x;
-}
-/*! \brief Precompute powers of $\gamma$ and $\omega$ for NTT and InvNTT
- */
-void ntt_precompute4(uint32_t* gamma, uint32_t *omega, uint32_t* g_inv, uint32_t* o_inv,
-    unsigned int N, uint32_t q) 
-{
-    uint32_t N_inv  = INVM(N, q);
-    uint32_t gamma1 = gamma[1];
-    uint32_t omega1 = omega[1];
-    uint32_t o_inv1 = INVM(omega1, q);
-    uint32_t g_inv1 = INVM(gamma1, q);
-    gamma[0] = 1; g_inv[0] = 1; 
-    omega[0] = 1; o_inv[0] = 1;
-    uint32_t k = RevBits(1)>>8;
-    gamma[k] = gamma1;
-    omega[k] = omega1;
-    g_inv[k] = g_inv1;
-    o_inv[k] = o_inv1;
-
-    uint32_t gm = gamma1;
-    uint32_t om = omega1;
-    uint32_t gi = g_inv1;
-    uint32_t oi = o_inv1;
-    for (uint32_t i=2; i<N; i++) {// обратный порядок бит.
-        uint32_t k = RevBits(i)>>8;
-        gamma[k] = gm = MULM(gm, gamma1, q);
-        omega[k] = om = MULM(om, omega1, q);
-        g_inv[k] = gi = MULM(gi, g_inv1, q);
-        o_inv[k] = oi = MULM(oi, o_inv1, q);
-    }
 }
 /*! \brief Расчет вектора степеней корня степени N для применения в NTT
     \param r вектор степеней корня степени N, записывается в bit-reversed order
@@ -834,10 +889,10 @@ void ntt_precompute_rev(uint32_t* r, uint32_t gamma, uint32_t N, uint32_t q) {
     uint32_t g = gamma;
     int s = __builtin_clz(N-1);
     r[RevBits(0u)>>s] = 1;
-//    r[RevBits(1u)>>s] = g;
-    for (uint32_t i=1; i<N; i++) {
-        r[(RevBits(i)>>s)] = g;
+    r[RevBits(1u)>>s] = g;
+    for (uint32_t i=2; i<N; i++) {
         g = MULM(g, gamma, q);
+        r[(RevBits(i)>>s)] = g;
     }
 }
 /*! \brief Расчет вектора степеней корня степени 2N для применения в NTT
@@ -865,12 +920,17 @@ static int jacobi(uint64_t a, uint64_t m);
 uint32_t ntt_root(uint32_t N, uint32_t q){
     uint32_t gen =  3;// выбор генератора - квадратичный не-вычет
     while (jacobi(gen,q)!=-1) gen++;
+    uint32_t s = 1;
+    while (POWM(gen, (q-1)>>s, q)==1) s++;
+    if (s>1) N>>=s-1;
+    return POWM(gen, (q-1)/(N+N), q);
+/*
     uint32_t r = gen;
     do {
         while ( POWM(r, N+N, q)!=1)
             r = MULM(r, gen, q);
     } while (POWM(r, N, q)==1);
-    return r;
+    return r; */
 }
 
 #define BIT(x,n) (((x)>>(n))&1)
@@ -1093,7 +1153,7 @@ uint32_t mwc32_gen(uint32_t gen, uint32_t P){
     return gen;
 }
 
-/*! выбор генератора - квадратичный не-вычет 
+/*! \brief выбор генератора мультипликативной группы  - квадратичный не-вычет 
 
     \see (https://eprint.iacr.org/2012/470.pdf) 
     An algorithm for generating a quadratic non-residue modulo
@@ -1401,17 +1461,19 @@ int main(int argc, char **argv){
     if (1) {// NTT reference implementation
         printf("NTT test\n");
         uint32_t a[256];
+        uint32_t b[256];
         uint32_t c[256];
         uint32_t t[256];
         uint32_t r[256];
         uint32_t wv[256]; // вектор корня степени N в bit-reversed order
         uint32_t vv[256]; // вектор корня степени N в bit-reversed order
-        unsigned int n = 256;
+        uint32_t uv[256];
+        unsigned int n = 16;
         int res;
         int s = __builtin_clz(n-1);
         for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++) {
             for (int i=0; i<n; i++){// заполнение векторов
-                a[i] = i;
+                a[i] = i*35789;
                 c[i] = 0;
             }
 
@@ -1425,6 +1487,7 @@ int main(int argc, char **argv){
 
             ntt_precompute_rev(wv, g, n, p);// расчет вектора степеней корня степени N в bit-reversed order для применения в NTT
             ntt_precompute_rev(vv, g_, n, p);
+            ntt_precompute(uv, g, n, p);
             if (0){
                 for (int i=0; i<n; i++){// проверка результата
                     printf("%x ", wv[i]);
@@ -1445,10 +1508,11 @@ int main(int argc, char **argv){
             poly_gamma(a, g_, n, p);
             res = 1;
             for (int i=0; i<n; i++){// проверка результата
-                res = res && (a[i]==i);
+                res = res && (a[i]==i*35789);
             }
             printf("..%s ", res?"ok":"fail");
             NTT_nw_ref(c, a, g, n, p);
+            for (int i=0; i<n; i++) b[i] = a[i];
             NTT(a, wv, n, p);
             res = 1;
             for (unsigned int i=0; i<n; i++){// проверка результата
@@ -1460,14 +1524,45 @@ int main(int argc, char **argv){
             //invNTT_nw_ref(a, c, g_, n, p);
             res = 1;
             for (int i=0; i<n; i++){// проверка результата
-                res = res && (a[i]==i);
+                res = res && (a[i]==i*35789);
             }
             printf("..%s\n", res?"ok":"fail");
         }
     }
     if (1) {// Умножение полиномов методом NTT
+        int res;
         printf("poly mul\n"); 
-
+        const unsigned int n = 16;
+        uint32_t a[256];
+        uint32_t b[256];
+        uint32_t r[256];
+        uint32_t c[256];
+        uint32_t wv[256];
+        uint32_t vv[256];
+        for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++) {
+            for (int i=0; i<n; i++){// заполнение векторов
+                b[i] = i^7;
+                a[i] = i*3+1;
+                c[i] = 0;
+            }
+            b[0] = 3;
+            
+            uint32_t p = primes[k];
+            uint32_t g = ntt_root(n, p);
+            uint32_t g_= INVM(g, p);// g^{-1}
+            ntt_precompute_rev(wv, g, n, p);// расчет вектора степеней корня степени N в bit-reversed order для применения в NTT
+            ntt_precompute_rev(vv, g_, n, p);
+            printf("prime=%08x g=%8x ",p, g);
+            poly_mul(c, a, b, n, p); 
+            NTT_mul(r, a, b, wv, vv, n, p);
+            res = 1;
+            for (int i=0; i<n; i++){// проверка результата
+                // printf("%d: %x %x\n", i, c[i], r[i]);
+                res = res && (c[i]==r[i]);
+            }
+            printf("..%s\n", res?"ok":"fail");
+        }
+        return 0;
     }
     if (1) {// Поиск корней из единицы для простых чисел
         uint32_t g=3;
