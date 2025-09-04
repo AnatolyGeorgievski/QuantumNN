@@ -74,7 +74,7 @@ https://eprint.iacr.org/2012/470.pdf
 /*! \brief Специальный вид инверсии для алгоритма редуцирования $\lfloor (2^{64}-q)/q \rfloor$ 
     Ur = 2^{32}+INVL(q);
  */
-static inline uint32_t INVL(uint32_t v) {
+static inline uint64_t INVL(uint32_t v) {
     return ((unsigned __int64)(-v)<<32)/v;
 }
 
@@ -158,6 +158,15 @@ static inline __m512i _mulm(__m512i a, __m512i b, __m512i q, __m512i u){
     return _mm512_mask_blend_epi32((__mmask16)0xaaaau, d0, _mm512_slli_epi64(d1,32));
 //    return _mm512_mask_shuffle_epi32(d0, (__mmask16)0xaaaau, d1, 0x80); 
 //    return _mm512_unpacklo_epi32(d0, d1);
+}
+static inline __m512i _maddm(__m512i a, __m512i b, __m512i c, __m512i q, __m512i u){
+    __m512i d0 = _mm512_mul_epu32(a, b);
+    d0 = _mm512_add_epi64(d0, _mm512_maskz_mov_epi32(0x5555, c));
+    __m512i d1 = _mm512_mul_epu32(_mm512_srli_epi64(a,32), _mm512_srli_epi64(b,32));
+    d1 = _mm512_add_epi64(d1, _mm512_srli_epi64(c, 32));
+    d0 =  _barret(d0, q, u);
+    d1 =  _barret(d1, q, u);
+    return _mm512_mask_blend_epi32((__mmask16)0xaaaau, d0, _mm512_slli_epi64(d1,32));
 }
 /*! \brief Square modulo q 
     \param a - first operand
@@ -300,7 +309,7 @@ static inline void poly_xtime_subm(const uint32_t *a, const uint32_t *b, uint32_
     \param N степень полинома (x^N + 1)
  */
 static inline void poly_xtime_madd(uint32_t *r, const uint32_t *a, const uint32_t b,  const unsigned int N, uint32_t p) {
-    const uint32_t Ur = INVL(p);
+    const uint64_t Ur = INVL(p);
     __m512i q = _mm512_set1_epi32(p);
     __m512i q_= _mm512_set1_epi64(p);// это первое отличие
     __m512i u = _mm512_set1_epi64(Ur);
@@ -308,11 +317,12 @@ static inline void poly_xtime_madd(uint32_t *r, const uint32_t *a, const uint32_
     __m512i c = _mm512_loadu_epi32((const void *)(r + N-16)); // перенос
     c = _mm512_sub_epi32(q, c);// операция выполняется для полинома (x^N+1), для (x^N-1) не нужна
     for (int i = 0; i < N; i += 16) {// если N=256
-        __m512i va = _mm512_loadu_epi32((const void *)(a + i)); 
         __m512i vr = _mm512_loadu_epi32((const void *)(r + i));
-        va = _mulm(va, vb, q_, u);
+        __m512i va = _mm512_loadu_epi32((const void *)(a + i)); 
         c  = _mm512_alignr_epi32 (vr,c, 15);
-        va = _addm(va, c, q);
+        va = _maddm(va, vb, c, q_, u);
+//        va = _mulm(va, vb, q_, u);
+//        va = _addm(va, c, q);
         _mm512_storeu_epi32(r + i, va);
         c = vr;
     }
@@ -525,6 +535,12 @@ uint32_t soup_MULM(uint32_t a, uint64_t b, uint32_t p){
     uint64_t r = a*b - q*p;
     return  (r-p< r)? r - p: r;// min(r, r-p)
 }
+uint32_t shoup_MULM(uint32_t a, uint32_t b, uint64_t w,  uint32_t p){
+//    uint64_t w = (double)(b<<32)/p;
+    uint64_t q = (a*(uint64_t)w)>>32;
+    uint64_t r = a*(uint64_t)b - q*p;
+    return  (r-p< r)? r - p: r;// min(r, r-p)
+}
 uint32_t soup2_MULM(uint32_t a, uint64_t b, uint32_t p){
     uint64_t w = b;
     int l = __builtin_clzll(w);// количество ноликов в старшей части числа
@@ -554,6 +570,17 @@ uint32_t  mont_modm(uint64_t z, uint32_t q, uint64_t p){
     if (z>=q) z-=q;
     return  (uint32_t)z;
 }
+/*! \brief Редукция Монтгомери 
+    Работает на z<p, q<2^{31}
+ */
+int32_t  signed_mont_modm(int64_t z, int32_t q, int32_t p){
+    int32_t m = z * p; // low product z_0 (1/q)
+    z = (z + (int64_t)m*q)>>32; // high product
+//    if (z>=q) z-=q;
+    if (z<0) z+=q;
+    return  (int32_t)z;
+}
+
 /*! \brief Функция для вычисления q^{-1} mod 2^{32} */
 uint32_t mod_inverse(uint32_t q) {
     uint32_t q_inv = 1;
@@ -810,9 +837,14 @@ void vec_mulm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned 
     for (int i=0; i<N; i++)
         r[i] = MULM(a[i], b[i], q);
 }
-void vec_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q){
+void vec_mulm_u_(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q){
     for (int i=0; i<N; i++)
         r[i] = MULM(a[i], b, q);
+}
+void vec_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q){
+    uint64_t w = (double)((uint64_t)b<<32)/q;
+    for (int i=0; i<N; i++)
+        r[i] = shoup_MULM(a[i], b, w, q);
 }
 void vec_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t q){
     for (int i=0; i<N; i++)
@@ -822,12 +854,40 @@ void vec_subm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned 
     for (int i=0; i<N; i++)
         r[i] = SUBM(a[i], b[i], q);
 }
+void vec_xtime_madd(uint32_t *r, const uint32_t *a, uint32_t b, const unsigned int N, const uint32_t q){
+    uint32_t c = q-r[N-1];
+    uint32_t t;
+    for (int i=0; i<N; i++){
+        t = r[i];
+        r[i] = ADDM(MULM(a[i], b, q), c, q);
+        c = t;
+    }
+}
+void vec_xtime_madd_shoup(uint32_t *r, const uint32_t *a, uint32_t b, const unsigned int N, const uint32_t q){
+    uint32_t c = q-r[N-1];
+    uint32_t t;
+    uint64_t w = (double)((uint64_t)b<<32)/q;
+    for (int i=0; i<N; i++){
+        t = r[i];
+        r[i] = ADDM(shoup_MULM(a[i], b, w, q), c, q);
+        c = t;
+    }
+}
+void vec_xtime_addm(uint32_t *r, const uint32_t *a, const unsigned int N, const uint32_t q){
+    uint32_t c = q-r[N-1];
+    uint32_t t;
+    for (int i=0; i<N; i++){
+        t = r[i];
+        r[i] = ADDM(a[i], c, q);
+        c = t;
+    }
+}
 
 /*! \brief умножение полиномов в кольце $\mathbb{Z}_q[x]/(x^N + 1)$ с использованием NTT 
     \param r результат умножения
     \param a первый полином, заменяется на результат NTT
     \param b второй полином, заменяется на результат NTT
-    \param gamma store powers of $\gamma^i$ in bit-reverse ordering
+    \param gamma store powers of $\gamma^i$ in bit-reverse ordering, \gamma - корень 2N степени из единицы
     \param r_gamma store powers of $\gamma^{-i}$ in bit-reverse ordering
     \param N power of 2
     \param q prime modulus satisfying $q \equiv 1 \mod 2N$
@@ -844,9 +904,14 @@ void NTT_mul(uint32_t *r, uint32_t *a, uint32_t *b, const uint32_t *gamma, const
 /*! \brief умножение полиномов в кольце $\mathbb{Z}_q[x]/(x^N + 1)$ без использования NTT */
 void poly_mul(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t q)
 {
+    uint32_t v[N];
     poly_mulm_u(r, a, b[N-1], N, q);
-    for (int i = N-2; i>=0; i--)
+    for (int i = N-2; i>=0; i--){
         poly_xtime_madd(r, a, b[i], N, q);
+        //vec_xtime_madd_shoup(r, a, b[i], N, q);
+        //poly_mulm_u(v, a, b[i], N, q);
+        //vec_xtime_addm(r, v, N, q);
+    }
 }
 static
 void NTT_CT_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q) {
@@ -1022,7 +1087,7 @@ uint32_t mwc32u_next(uint32_t h, const uint32_t A){
     if (r > (A<<16)) r+= (A<<16)+1;
     return r;
 }
-#if defined(TEST_NTT)
+#if defined(TEST_NTT) || 1
 
 uint32_t mwc32_hash_16(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
     h += d;
@@ -1354,7 +1419,7 @@ int main(int argc, char **argv){
                 }
             }
         }
-        for (int k = 0; k< sizeof(primes)/sizeof(primes[0]); k++) {
+        if (0) for (int k = 0; k< sizeof(primes)/sizeof(primes[0]); k++) {
             const uint32_t p = primes[k];
             uint32_t h = 3;
             while (jacobi(h, p)!=-1 || gcd(h,p-1)!=1 || POWM(h, (p-1)/2, p)==1) h+=2;
@@ -1407,7 +1472,7 @@ int main(int argc, char **argv){
                     break;
                 } */
                 if (h==g) {
-                    if ((i&0xFFFF)==0xFFFF)
+                    if ((i&0x1FFE)==0x1FFE)
                         printf("mwc32s prime=%08x gen=%2d ord %08x\n",p,g, i);
                     break;
                 }
@@ -1416,12 +1481,14 @@ int main(int argc, char **argv){
         return 0;
     }
     if (0) {// montgomery test
+        printf("Montogery test\n");
         uint32_t p = primes[0];
         uint32_t pi = -mod_inverse(p); 
         uint32_t qinv=4236238847;
         printf ("prime=%u pi = %u %x \n",p, pi, p*qinv);
-        for (int k = 1; k< 15/* sizeof(primes)/sizeof(primes[0]) */; k++) {
+        for (int k = 1; k< sizeof(primes)/sizeof(primes[0]); k++) {
             uint32_t p = primes[k];
+            if ((p>>31)!=0) continue;
             uint32_t pi = mod_inverse(p);
             printf ("p=%08x pi = %08x %08x \n",p, pi, p*(-pi));
             for (uint32_t a =p; a>0; a--)
@@ -1439,6 +1506,30 @@ int main(int argc, char **argv){
             //break;
         }
         return 0;
+    }
+    if (1) {// Signed montgomery test
+        printf("Signed Montogery test\n");
+        for (int k = 1; k< sizeof(primes)/sizeof(primes[0]); k++) {
+            int32_t p = primes[k];
+            if ((p>>31)!=0) continue;
+            int32_t pi = mod_inverse(p);
+            printf ("p=%08x pi = %08x %08x \n",p, pi, p*(-pi));
+            for (int32_t a =p; a>0; a--)
+            {
+                int32_t b  = ((int64_t)a<<32)%p;
+                int64_t a2 = (int64_t)a*b;
+
+                int32_t r  = signed_mont_modm(a2, p, -pi);
+                int32_t r2 = ((int64_t)a*a)%p;
+                if (r2!=r) {
+                    printf ("r = %d %d p=%08x \n", r,r2,a);
+                     break;
+                }
+            }
+            //break;
+        }
+        return 0;
+
     }
     if (0) {// soup test
         printf("Soup modular reduction\n");
@@ -1532,29 +1623,38 @@ int main(int argc, char **argv){
     if (1) {// Умножение полиномов методом NTT
         int res;
         printf("poly mul\n"); 
-        const unsigned int n = 16;
+        const unsigned int n = 256;
         uint32_t a[256];
         uint32_t b[256];
         uint32_t r[256];
         uint32_t c[256];
         uint32_t wv[256];
         uint32_t vv[256];
+        uint32_t wu[256];
+        uint32_t vu[256];
         for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++) {
+            uint32_t p = primes[k];
+            if ((p&(2*n-1))!=1) continue;
+            
             for (int i=0; i<n; i++){// заполнение векторов
-                b[i] = i^7;
+                b[i] = (i^7+2561894)%p;
                 a[i] = i*3+1;
                 c[i] = 0;
             }
             b[0] = 3;
             
-            uint32_t p = primes[k];
             uint32_t g = ntt_root(n, p);
             uint32_t g_= INVM(g, p);// g^{-1}
             ntt_precompute_rev(wv, g, n, p);// расчет вектора степеней корня степени N в bit-reversed order для применения в NTT
             ntt_precompute_rev(vv, g_, n, p);
+            ntt_precompute_rev(wu, SQRM(g,p), n, p);
+            ntt_precompute_rev(vu, SQRM(g_,p), n, p);
             printf("prime=%08x g=%8x ",p, g);
             poly_mul(c, a, b, n, p); 
+//            poly_gamma(a, g, n, p);
+//            poly_gamma(b, g, n, p);
             NTT_mul(r, a, b, wv, vv, n, p);
+//            poly_gamma(r, g_, n, p);
             res = 1;
             for (int i=0; i<n; i++){// проверка результата
                 // printf("%d: %x %x\n", i, c[i], r[i]);
