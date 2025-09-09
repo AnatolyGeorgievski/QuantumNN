@@ -79,6 +79,7 @@ static inline uint64_t INVL(uint32_t v) {
 }
 
 #ifdef __AVX512F__
+#define VL 16
 typedef uint32_t uint32x16_t __attribute__((__vector_size__(64)));
 // модуль q
 static inline __m512i _mod1(__m512i x, __m512i q){
@@ -328,6 +329,7 @@ static inline void poly_xtime_madd(uint32_t *r, const uint32_t *a, const uint32_
     }
 }
 #elif defined(__AVX2__)
+#define VL 8
 typedef uint32_t uint32x8_t __attribute__((__vector_size__(32)));
 static inline __m256i _mod1_avx2(__m256i x, __m256i q){
     return _mm256_min_epu32(x, _mm256_sub_epi32(x, q));
@@ -682,11 +684,19 @@ static void NTT_GS_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int 
     * [2012.01968](https://arxiv.org/pdf/2012.01968)
     * [2103.16400](https://arxiv.org/pdf/2103.16400) 
     * [2024/585](https://eprint.iacr.org/2024/585.pdf) 
+    * [NIST:FIPS.203](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf)
 */
 uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
     unsigned int i, j, k, m, n;
     n = N/2;
-    for (m = 1; m < N; m = 2*m, n = n/2) {
+    for (m = 1; m < N/8; m = 2*m, n = n/2) {
+        for (i=0, k=0; i<m; i++, k+=2*n) {
+            uint32_t w = gamma[m+i];
+            NTT_CT_butterfly(a+k, a+k+n, w, n, q);
+        }
+    }
+    // можно оптимизировать
+    for (; m < N; m = 2*m, n = n/2) {
         for (i=0, k=0; i<m; i++, k+=2*n) {
             uint32_t w = gamma[m+i];
             NTT_CT_butterfly(a+k, a+k+n, w, n, q);
@@ -927,6 +937,21 @@ void NTT_GS_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint
     vec_addm(a, a, b, n, q);
     vec_mulm_u(b, w, g, n, q);
 }
+/*! \brief Умножение полинома на полином-константу с использованием NTT
+
+    Синтез матрицы цикличесих перестановок с использованием NTT 
+    Для этого берется первая колонка матрицы перестановок в виде вектора и выполняется NTT, 
+    полученный вектор возвращается как результат вместо исходного вектора.
+
+    Частные случаи: диагональные матрицы, матрицы в которых все элементы равны 1.
+    Блочные гамильтоновы матрицы AJ = -(AJ)^T, где J - skew-symmetric [0, I; -I, 0], I- единичная матрица.
+    Матрицы Вандермонда.
+ */
+void NTT_cmul(uint32_t*a, const uint32_t* mds, const uint32_t* gamma, const uint32_t* r_gamma, unsigned int N, uint32_t q) {
+    NTT(a, gamma, N, q);
+    vec_mulm(a, a, mds, N, q);
+    invNTT(a, r_gamma, N, q);
+}
 
 /*! \brief Обратный битовый порядок для 8 битных чисел */
 static uint8_t RevBits8(uint8_t x){
@@ -943,6 +968,11 @@ static uint32_t RevBits(uint32_t x){
     x = ((x & 0x00FF00FF) << 8) | ((x & 0xFF00FF00) >> 8);
     x = ((x & 0x0000FFFF) <<16) | ((x & 0xFFFF0000) >>16);
     return x;
+}
+/*! \brief Обратный битовый порядок для N битных чисел */
+static uint32_t RevBits_N(uint32_t x, unsigned int N){
+    int s = __builtin_clz(N-1);
+    return RevBits(x)>>s;
 }
 /*! \brief Расчет вектора степеней корня степени N для применения в NTT
     \param r вектор степеней корня степени N, записывается в bit-reversed order
@@ -1507,7 +1537,7 @@ int main(int argc, char **argv){
         }
         return 0;
     }
-    if (1) {// Signed montgomery test
+    if (0) {// Signed montgomery test
         printf("Signed Montogery test\n");
         for (int k = 1; k< sizeof(primes)/sizeof(primes[0]); k++) {
             int32_t p = primes[k];
