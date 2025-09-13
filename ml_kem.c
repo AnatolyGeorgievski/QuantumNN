@@ -18,10 +18,18 @@
 |ML-KEM-768  256 3329  3   2    2    10   4    192
 |ML-KEM-1024 256 3329  4   2    2    11   5    256
 
-В реализации используется упаковка SIMD uint16x2_t, поскольку вычисления ведуться в сопряженных парах.
+В реализации используется упаковка SIMD uint16x2_t, поскольку вычисления ведутся в сопряженных парах.
 
 uint16x8_t, uint16x16_t, uint16x32_t для ускорения вычислений на современных процессорах.
 Длина вектора определяется при компиляции и задается параметром VL=32,16,8.
+
+Алгоритмы используют криптографический хэш и XOF генерацию, см. shake256.c:
+XOF = SHAKE128, 
+PRF = SHAKE256, 
+H   = SHA-3-256, 
+J   = SHAKE256,
+G   = SHA-3-512
+
 
 Описание перестановок CT butterfly через индекс:
 offs=4;
@@ -58,30 +66,53 @@ z = shuffle(zp,zm, {z1,-z1,z5,-z5, z3,-z3,z7,-z7})
 f = a + VMULM(b,z)
 
 */
-
 #include <stdint.h>
 #include <stdio.h>
+// \see (shake256.c)
+typedef struct _XOF_ctx XOF_ctx_t;
+extern void shake128(uint8_t *data, size_t len, uint8_t *tag, int d);
+extern void shake256(uint8_t *data, size_t len, uint8_t *tag, int d);
+extern void sha3_256(uint8_t *data, size_t len, uint8_t *tag);
+extern void sha3_512(uint8_t *data, size_t len, uint8_t *tag);
+
+
+
+#define MLKEM_512  1
+#define MLKEM_768  2
+#define MLKEM_1024 3
+
+#define K 2
+#define ETA1 3
+#define ETA2 2
+
 // Q_PRIME 12289 и N = 512 - другой вариант см. BLISS
 // Q_PRIME  3329 и N = 256 - ML-KEM
 #define N       256
 #define Q_PRIME 3329// (13<<8) +1
 
-#if Q_PRIME == 3329
+#if (Q_PRIME == 3329)
 #define ZETA    17  // корень из единицы N-й степени
 #define N_INV   3303// ≡ 128^{−1} mod Q
 #define Q_MONT  3327// -q^{-1} mod 2^{16} = 3327
 #define U_BARRETT 40317 // 2^{27}/Q_PRIME
-#elif Q_PRIME == 12289
+#elif (Q_PRIME == 12289)
 #define ZETA    ??  // корень из единицы N-й степени
 #define Q_MONT  53249
 #endif
 
 typedef uint16_t uint16x2_t  __attribute__((vector_size(4)));
-typedef uint16_t uint16x16_t __attribute__((vector_size(32)));
-typedef uint16_t uint16x32_t __attribute__((vector_size(64)));
 typedef  int16_t  int16x2_t __attribute__((vector_size(4)));
 
-// Алгоритм заменяет целочисленное деление на модуль на умножение (mul_hi) и сдвиг. 
+typedef uint16_t uint16x16_t __attribute__((vector_size(32)));
+typedef uint16_t uint16x32_t __attribute__((vector_size(64)));
+
+/*! Алгоритм заменяет целочисленное деление на модуль на умножение (mul_hi) и сдвиг. 
+
+    Есть сомнение, как правильно высчитывать константу, можно округлять RNE или RTP 
+(в большую сторону), чтобы не проверять отрицательные значения. 
+    В данном случае используется округление к большему значению. 
+    Если используется signed_shoup, то округление должно быть RNE.
+ */
 uint32_t shoup_div(uint32_t b){
 #if Q_PRIME == 3329
     return (b*0x9D7DBB41uLL)>>(43-16);
@@ -167,16 +198,14 @@ static inline uint16x16_t VSUBM(uint16x16_t a, uint16x16_t b, uint16x16_t p){
 }
 /*! Shoup's multiplication with precomputed w = (b<<16)/Q_PRIME for faster computation */
 static inline uint16x16_t VMULM(uint16x16_t a, uint16x16_t b, uint16x16_t w, uint16x16_t p){
-//    __m256i p = _mm256_set1_epi16(Q_PRIME);
     __m256i q = _mm256_mulhi_epu16((__m256i)a, (__m256i)w);
     __m256i r0= _mm256_mullo_epi16((__m256i)a, (__m256i)b);
     __m256i r1= _mm256_mullo_epi16(q, (__m256i)p);
     r0 = _mm256_sub_epi16(r0, r1);// тут могут быть отрицательные значения
     __m256i r = _mm256_min_epu16(r0, _mm256_add_epi16(r0, (__m256i)p));
-    // r = _mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)p));    
     return (uint16x16_t)r;
 }
-/*! Montogomery multiplication with precomputed qm = -q^{-1} mod 2^{16} 
+/*! Montgomery multiplication with precomputed qm = -q^{-1} mod 2^{16} 
     \return a*b\beta^{-1} mod q 
  */
 static inline uint16x16_t VMULM_mont(uint16x16_t a, uint16x16_t b, uint16x16_t qm, uint16x16_t q){
@@ -197,27 +226,32 @@ static inline uint16x16_t VMULM_mont(uint16x16_t a, uint16x16_t b, uint16x16_t q
 static inline uint16x16_t VMULM_barrett(uint16x16_t a, uint16x16_t b, uint16x16_t u, uint16x16_t q){
     __m256i z1 = _mm256_mulhi_epu16((__m256i)a, (__m256i)b);
     __m256i z0 = _mm256_mullo_epi16((__m256i)a, (__m256i)b);
-    __m256i Ur = _mm256_set1_epi16(U_BARRETT);
+//    __m256i Ur = _mm256_set1_epi16(U_BARRETT);
 #if defined(__AVX512_VBMI2__) && defined(__AVX512VL__)// AVX10.1
     __m256i c1 = _mm256_shrdi_epi16(z0,z1, 11);
 #else 
     __m256i c1 = _mm256_or_si256(_mm256_srli_epi16(z0, 11), _mm256_slli_epi16(z1, 16-11));
 #endif
-    __m256i c2 = _mm256_mulhi_epu16(Ur, c1);
+    __m256i c2 = _mm256_mulhi_epu16((__m256i)u, c1);
     __m256i c4 = _mm256_mullo_epi16(c2,  (__m256i)q);
     __m256i r  = _mm256_sub_epi16(z0, c4);
     return (uint16x16_t)_mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)q));
 }
-
+static inline uint16x16_t VROTL(uint16x16_t a, uint16x16_t b){
+    return __builtin_shufflevector(a,b, 31, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14);
+}
 #else // Векторизация не используется
 #define VL 2
 #define VSET1(x) {x,x}
 static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w);
-uint16x2_t VMULM(uint16x2_t a, uint16x2_t b, uint16x2_t w, uint16x2_t q){
+static uint16x2_t VMULM(uint16x2_t a, uint16x2_t b, uint16x2_t w, uint16x2_t q){
     uint16x2_t r;
     r[0] = shoup_MULM(a[1], b[0], w[0]);
     r[1] = shoup_MULM(a[1], b[1], w[1]);
     return r;
+}
+static inline uint16x2_t VROTL(uint16x2_t a, uint16x2_t b){
+    return __builtin_shufflevector(a,b, 3, 0);
 }
 #endif
 
@@ -274,12 +308,32 @@ void vec_xtime_madd(uint16x16_t* r, uint16x16_t* a, uint16_t b, unsigned int len
     uint16x16_t p  = VSET1(Q_PRIME);
     uint16x16_t c = p - r[len/VL-1];
     for (int i=0; i<len/VL; i++){
-        uint16x16_t v = __builtin_shufflevector(r[i], c, 31, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14);
+        uint16x16_t v = VROTL(r[i], c);
         c = r[i];
         r[i] = VADDM(v, VMULM(a[i],bv,wv, p), p);
     }
 }
-void poly_mul(uint16x2_t *r, const uint16x2_t *a, const uint16_t *b)
+// Сложение полиномов по модулю
+static void poly_add(uint16x2_t *r_, const uint16x2_t *a_, const uint16x2_t *b_){
+    const uint16x16_t* a = (const uint16x16_t*)a_;
+    const uint16x16_t* b = (const uint16x16_t*)b_;
+    uint16x16_t* r = (uint16x16_t*)r_;
+    uint16x16_t p  = VSET1(Q_PRIME);
+    for (int i = 0; i<N/VL; i++){
+        r[i] = VADDM(a[i], b[i], p);
+    }
+}
+// Вычитание полиномов по модулю
+static void poly_sub(uint16x2_t *r_, const uint16x2_t *a_, const uint16x2_t *b_){
+    const uint16x16_t* a = (const uint16x16_t*)a_;
+    const uint16x16_t* b = (const uint16x16_t*)b_;
+    uint16x16_t* r = (uint16x16_t*)r_;
+    uint16x16_t p  = VSET1(Q_PRIME);
+    for (int i = 0; i<N/VL; i++){
+        r[i] = VSUBM(a[i], b[i], p);
+    }
+}
+static void poly_mul(uint16x2_t *r, const uint16x2_t *a, const uint16_t *b)
 {
     vec_mulm_u(r, a, b[N-1], N);
     for (int i = N-2; i>=0; i--){
@@ -299,10 +353,24 @@ static inline uint32_t compress(uint32_t x, unsigned int d){
 static inline uint32_t decompress(uint32_t y, unsigned int d){
     return (Q_PRIME*y + (1u<<(d-1)))/(1u<<d);
 }
-// Decodes a byte array into an array of 𝑑-bit integers for 1 ≤ 𝑑 ≤ 12.
-uint16_t* ByteDecode(uint8_t * s, unsigned int d){
+static uint16_t* Decompress(uint16_t* a,  unsigned int d){
+    for(int i=0; i<N; i++){
+        a[i] = decompress(a[i], d);
+    }
+    return a;
+}
+static uint16_t* Compress(uint16_t* a,  unsigned int d){
+    for(int i=0; i<N; i++){
+        a[i] = compress(a[i], d);
+    }
+    return a;
+}
+/*! \brief Algorithm 6 ByteDecode_𝑑(B) 
+
+    Decodes a byte array into an array of 𝑑-bit integers for 1 ≤ 𝑑 ≤ 12.
+ */
+uint16_t* ByteDecode(uint16_t* dst, const uint8_t *s, unsigned int d){
     uint32_t mask = (1u<<d)-1;
-    uint16_t* dst = (uint16_t*)s;
     int bits = 0;
     uint32_t v = 0;
     for(int i=0; i<N; i++){
@@ -310,16 +378,38 @@ uint16_t* ByteDecode(uint8_t * s, unsigned int d){
             v |= (*s++)<<bits;
             bits+=8;
         }
-        *dst++ = (uint16_t) v & mask;
+        dst[i] = (uint16_t) v & mask;
         v>>=d;
         bits-=d;
     }
+    return dst;
 }
-uint16_t* ByteEncode(uint8_t * s, unsigned int d){
+/*! \brief Algorithm 5 ByteEncode_𝑑(F) 
+
+    Encodes an array of 𝑑-bit integers into a byte array for 1 ≤ 𝑑 ≤ 12.
+    \param s - выходной буфер, байты
+    \param src - входной вектор, целые числа
+    \param d - количество бит
+ */
+uint8_t* ByteEncode(uint8_t * s, const uint16_t* src, unsigned int d){
+    uint16_t mask = (1u<<d)-1;
+    int bits = 0;
+    uint32_t v = 0;
+    for(int i=0; i<N; i++){
+        v |= (src[i] & mask)<<bits;
+        bits+=d;
+        while (bits>=8) {
+            *s++ = (uint8_t) v;
+            v>>=8;
+            bits-=8;
+        }
+    }
+    return s;
 }
 #if 0
 /*! \brief Algorithm 7 SampleNTT(𝐵)
-Takes a 32-byte seed and two indices as input and outputs a pseudorandom element of 𝑇𝑞.*/
+    Takes a 32-byte seed and two indices as input and outputs a pseudorandom element of 𝑇𝑞.
+*/
 void SampleNTT(uint16_t *a, uint8_t *b){
     XOF_ctx_t ctx;
     XOF.init(&ctx);
@@ -363,18 +453,9 @@ void SamplePolyCBD(uint16_t *f,  uint8_t *b, int eta, uint32_t q)
 }
 
 // Gentleman-Sande (GS) butterfly
-void NTT_GS_butterfly(uint16x2_t *f_, unsigned int len, uint16_t zeta){
-#if 0
-    uint16_t *f = (uint16_t *)f_;
-    uint16_t *g = (uint16_t *)(f_+len/2);
-    uint16_t t;
-    for (int i=0; i<len; i++){
-        t = f[i];
-        f[i] = (g[i] + t)%Q_PRIME;
-        g[i] = ((g[i] +Q_PRIME- t) * (uint32_t)zeta)%Q_PRIME;
-    }
-#else
-if (len>=VL){
+static void NTT_GS_butterfly(uint16x2_t *f_, unsigned int len, uint16_t zeta){
+//if (len>=VL)
+{
     uint16x16_t *f = (uint16x16_t*)(f_);
     uint16x16_t *g = (uint16x16_t*)(f_+len/2);
     uint16x16_t t;
@@ -385,9 +466,11 @@ if (len>=VL){
     for (int i=0; i<len/VL; i++){
         t = f[i];
         f[i] = VADDM(g[i],t, p);
-        g[i] = VMULM(VSUBM(g[i],t, p), z, wv, p); 
+        g[i] = VMULM(g[i]+p-t, z, wv, p); 
     }
-} else {
+}
+#if 0
+else {
     uint16x2_t *f = f_;
     uint16x2_t *g = f_+len/2;
     uint16x2_t z = {zeta, zeta};
@@ -400,19 +483,11 @@ if (len>=VL){
 }
 #endif
 }
+
 /*! Cooley-Tukey (CT) bufferfly */
-void NTT_CT_butterfly(uint16x2_t *f_, unsigned int len, uint16_t zeta){
-#if 0
-    uint16_t *f = (uint16_t *)f_;
-    uint16_t *g = (uint16_t *)(f_+len/2);
-    uint16_t t;
-    for (int i=0; i<len; i++){
-        t = (g[i]* (uint32_t)zeta)%Q_PRIME;
-        g[i] = (uint32_t)(f[i] +Q_PRIME- t)%Q_PRIME;
-        f[i] = (f[i] + t)%Q_PRIME;
-    }
-#else
-if (len>=VL){
+static void NTT_CT_butterfly(uint16x2_t *f_, unsigned int len, uint16_t zeta){
+//if (len>=VL)
+{
     uint16x16_t *f = (uint16x16_t*)(f_);
     uint16x16_t *g = (uint16x16_t*)(f_+len/2);
     uint16x16_t t;
@@ -422,10 +497,12 @@ if (len>=VL){
     uint16x16_t wv = VSET1(w);
     for (int i=0; i<len/VL; i++){
         t = VMULM(g[i], z, wv, p);
-        g[i] = f[i]+p-t;//VSUBM(f[i], t, p);
-        f[i] = f[i]+t;//VADDM(f[i], t, p); 
+        g[i] = VSUBM(f[i], t, p);
+        f[i] = VADDM(f[i], t, p); 
     }
-} else {
+}
+#if 0
+else {
     printf("l=%d,%d \n", len, zeta);
     uint16x2_t *f = f_;
     uint16x2_t *g = f_+len/2;
@@ -437,26 +514,130 @@ if (len>=VL){
         f[i] = ADDM(f[i], t);
     }
 }
-}
 #endif
+}
+static const uint16x16_t xzv[] = {
+{    1, 1062,  296, 2447,  289,  331, 3253, 1756,   17, 2761,  583, 2649, 1637,  723, 2288, 1100,},
+{ 1729, 1919, 1339, 1476, 1197, 2304, 2277, 2055, 1409, 2662, 3281,  233,  756, 2156, 3015, 3050,},
+{ 2580,  193, 3046,   56,  650, 1977, 2513,  632, 1703, 1651, 2789, 1789, 1847,  952, 1461, 2687,},
+{ 3289,  797, 2240, 1333, 2865,   33, 1320, 1915,  939, 2308, 2437, 2388,  733, 2337,  268,  641,},
+{ 2642, 2786, 1426, 2094, 2319, 1435,  807,  452, 1584, 2298, 2037, 3220,  375, 2549, 2090, 1645,},
+{  630, 3260,  535, 2882, 1438, 2868, 1534, 2402, 1063,  319, 2773,  757, 2099,  561, 2466, 2594,},
+{ 1897,  569, 2393, 2879, 2647, 2617, 1481,  648, 2804, 1092,  403, 1026, 1143, 2150, 2775,  886,},
+{  848, 1746, 1974,  821, 2474, 3110, 1227,  910, 1722, 1212, 1874, 1029, 2110, 2935,  885, 2154,},
+};
+static const uint16x16_t wzv[] = {
+{   19,20906, 5827,48172, 5689, 6516,64039,34569,  334,54354,11477,52149,32226,14233,45042,21655,},
+{34037,37778,26360,29057,23564,45357,44825,40455,27738,52405,64591, 4586,14882,42443,59354,60043,},
+{50790, 3799,59964, 1102,12796,38919,49471,12441,33525,32502,54905,35218,36360,18741,28761,52897,},
+{64748,15690,44097,26241,56401,  649,25986,37699,18485,45436,47975,47011,14430,46007, 5275,12618,},
+{52011,54846,28072,41223,45652,28249,15886, 8898,31183,45239,40101,63390, 7382,50180,41144,32384,},
+{12402,64177,10532,56736,28309,56460,30198,47286,20926, 6279,54590,14902,41321,11044,48546,51066,},
+{37345,11201,47109,56677,52109,51519,29155,12756,55200,21497, 7933,20198,22501,42325,54629,17442,},
+{16694,34372,38860,16162,48704,61224,24155,17914,33899,23859,36892,20257,41538,57779,17422,42404,},
+};
+/*! \brief Оптимизированная версия NTT_CT_butterfly_2xVL для использования с векторами x16. 
 
+    Идея данного алгоритма в том, чтобы использовать перестановки так чтобы на каждом шаге размещение элементов вектора f и g 
+    соответствовало входному порядку элементов вектора. Престанвки из операции BaseCaseMultiply_2xVL исключаются за счет выходных перестановок. 
+    
+ */
+void NTT_CT_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16_t w, uint16x16_t p){
+    uint16x16_t a,b,f,g,zv,wv;
+    f = f_[0], g = f_[1]; 
+    zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    g = VMULM(g, zv,wv, p);
+        a = f+g;//VADDM(f, g, p);
+        b = f+p-g;//VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    zv = __builtin_shuffle(z, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
+    wv = __builtin_shuffle(w, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
+    g = VMULM(g, zv,wv, p);
+        a = f+g;//VADDM(f, g, p);
+        b = f+p-g;//VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
+    zv = __builtin_shuffle(z, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
+    wv = __builtin_shuffle(w, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
+    g = VMULM(g, zv,wv, p);
+        a = f+g;//VADDM(f, g, p);
+        b = f+p-g;//VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    zv = __builtin_shuffle(z, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
+    wv = __builtin_shuffle(w, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    f_[0] = f, f_[1] = g;
+}
+/*! \brief Векторная бабочка обратного преобразования NTT для векторов длины 2xVL 
+    \param f_ вектора для преобразования
+    \param z вектор степеней корня из 1, используются значения того же вектора, 
+    что и в прямом преобразовании, но в обратном порядке
+
+    zr[i] = _shuffle(z[7-i], {0,1,3,2,7,6,5,4,15,14,13,12,11,10,9,8});
+    zr*z = -1 (mod q)
+
+    \param w константы для Shoup multiplication
+
+    \note модульную операцию сложения и вычитания можно заменить на обычное сложение, 
+    в тех случаях когда поле операции идет умножение и редуцирование по модулю (VMULM). 
+ */
+void NTT_GS_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16_t w, uint16x16_t p){
+    uint16x16_t a,b,f,g,zv,wv;
+    a = f_[0], b = f_[1]; 
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    a = VADDM(g, f, p);
+    b = g+p-f;//VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){15,15,14,14, 13,13,12,12, 11,11,10,10, 9,9,8,8});
+    wv = __builtin_shuffle(w, (uint16x16_t){15,15,14,14, 13,13,12,12, 11,11,10,10, 9,9,8,8});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    a = VADDM(g, f, p);
+    b = g+p-f;//VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){7,7,7,7, 6,6,6,6, 5,5,5,5, 4,4,4,4});
+    wv = __builtin_shuffle(w, (uint16x16_t){7,7,7,7, 6,6,6,6, 5,5,5,5, 4,4,4,4});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
+    a = VADDM(g, f, p);
+    b = g+p-f;//VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2});
+    wv = __builtin_shuffle(w, (uint16x16_t){3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    a = VADDM(g, f, p);
+    b = g+p-f;//VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    b = VMULM(b, zv, wv, p);
+    f_[0] = a, f_[1] = b;
+}
 static uint16_t zeta2[] = {// степени zeta^{2 BitRev(i)+1} mod q
-  17,  -17,2761,-2761, 583, -583,2649,-2649,
-1637,-1637, 723, -723,2288,-2288,1100,-1100,
-1409,-1409,2662,-2662,3281,-3281, 233, -233,
- 756, -756,2156,-2156,3015,-3015,3050,-3050,
-1703,-1703,1651,-1651,2789,-2789,1789,-1789,
-1847,-1847, 952, -952,1461,-1461,2687,-2687,
- 939, -939,2308,-2308,2437,-2437,2388,-2388,
- 733, -733,2337,-2337, 268, -268, 641, -641,
-1584,-1584,2298,-2298,2037,-2037,3220,-3220,
- 375, -375,2549,-2549,2090,-2090,1645,-1645,
-1063,-1063, 319, -319,2773,-2773, 757, -757,
-2099,-2099, 561, -561,2466,-2466,2594,-2594,
-2804,-2804,1092,-1092, 403, -403,1026,-1026,
-1143,-1143,2150,-2150,2775,-2775, 886, -886,
-1722,-1722,1212,-1212,1874,-1874,1029,-1029,
-2110,-2110,2935,-2935, 885, -885,2154,-2154,
+  17, 3312,2761,  568, 583, 2746,2649,  680,
+1637, 1692, 723, 2606,2288, 1041,1100, 2229,
+1409, 1920,2662,  667,3281,   48, 233, 3096,
+ 756, 2573,2156, 1173,3015,  314,3050,  279,
+1703, 1626,1651, 1678,2789,  540,1789, 1540,
+1847, 1482, 952, 2377,1461, 1868,2687,  642,
+ 939, 2390,2308, 1021,2437,  892,2388,  941,
+ 733, 2596,2337,  992, 268, 3061, 641, 2688,
+1584, 1745,2298, 1031,2037, 1292,3220,  109,
+ 375, 2954,2549,  780,2090, 1239,1645, 1684,
+1063, 2266, 319, 3010,2773,  556, 757, 2572,
+2099, 1230, 561, 2768,2466,  863,2594,  735,
+2804,  525,1092, 2237, 403, 2926,1026, 2303,
+1143, 2186,2150, 1179,2775,  554, 886, 2443,
+1722, 1607,1212, 2117,1874, 1455,1029, 2300,
+2110, 1219,2935,  394, 885, 2444,2154, 1175,
 };
 static uint16_t wzeta2[]= {// w = (z<<16)/q - коэффициенты для Shoup's multiplication
   334,65201,54354,11181,11477,54058,52149,13386,
@@ -501,116 +682,42 @@ Computes NTT representation 𝑓 of the given polynomial 𝑓 ∈ 𝑅_𝑞.
 
 Алгоритм можно разделить на две части:
 1. Прямое преобразование (CT) на регистрах с длиной 16 и более, когда используется одно значение zeta на вектор. 
-2. Преобразование CT NTT_CT_butterfly_x8 на длины 8 и менее. 
+2. Преобразование CT NTT_CT_butterfly_2xVL на длины VL и менее. 
 Для этого используются перестановки значений zeta внутри вектора. 
 
 */
-static const uint16x16_t xzetav[] = {// степени zeta^{BitRev(i)} mod q
-{    1,  296,  289,  331,   17, 2761,  583, 2649,  3328, 3033, 3040, 2998, 3312,  568, 2746,  680,},
-{ 1729, 2447, 3253, 1756, 1637,  723, 2288, 1100,  1600,  882,   76, 1573, 1692, 2606, 1041, 2229,},
-{ 2580, 1339, 1197, 2304, 1409, 2662, 3281,  233,   749, 1990, 2132, 1025, 1920,  667,   48, 3096,},
-{ 3289, 1476, 2277, 2055,  756, 2156, 3015, 3050,    40, 1853, 1052, 1274, 2573, 1173,  314,  279,},
-{ 2642, 3046,  650, 1977, 1703, 1651, 2789, 1789,   687,  283, 2679, 1352, 1626, 1678,  540, 1540,},
-{  630,   56, 2513,  632, 1847,  952, 1461, 2687,  2699, 3273,  816, 2697, 1482, 2377, 1868,  642,},
-{ 1897, 2240, 2865,   33,  939, 2308, 2437, 2388,  1432, 1089,  464, 3296, 2390, 1021,  892,  941,},
-{  848, 1333, 1320, 1915,  733, 2337,  268,  641,  2481, 1996, 2009, 1414, 2596,  992, 3061, 2688,},
-{ 1062, 1426, 2319, 1435, 1584, 2298, 2037, 3220,  2267, 1903, 1010, 1894, 1745, 1031, 1292,  109,},
-{ 1919, 2094,  807,  452,  375, 2549, 2090, 1645,  1410, 1235, 2522, 2877, 2954,  780, 1239, 1684,},
-{  193,  535, 1438, 2868, 1063,  319, 2773,  757,  3136, 2794, 1891,  461, 2266, 3010,  556, 2572,},
-{  797, 2882, 1534, 2402, 2099,  561, 2466, 2594,  2532,  447, 1795,  927, 1230, 2768,  863,  735,},
-{ 2786, 2393, 2647, 2617, 2804, 1092,  403, 1026,   543,  936,  682,  712,  525, 2237, 2926, 2303,},
-{ 3260, 2879, 1481,  648, 1143, 2150, 2775,  886,    69,  450, 1848, 2681, 2186, 1179,  554, 2443,},
-{  569, 1974, 2474, 3110, 1722, 1212, 1874, 1029,  2760, 1355,  855,  219, 1607, 2117, 1455, 2300,},
-{ 1746,  821, 1227,  910, 2110, 2935,  885, 2154,  1583, 2508, 2102, 2419, 1219,  394, 2444, 1175,},
-};
-static const uint16x16_t wzetav[] = {
-{   19, 5827, 5689, 6516,  334,54354,11477,52149, 65516,59708,59846,59019,65201,11181,54058,13386,},
-{34037,48172,64039,34569,32226,14233,45042,21655, 31498,17363, 1496,30966,33309,51302,20493,43880,},
-{50790,26360,23564,45357,27738,52405,64591, 4586, 14745,39175,41971,20178,37797,13130,  944,60949,},
-{64748,29057,44825,40455,14882,42443,59354,60043,   787,36478,20710,25080,50653,23092, 6181, 5492,},
-{52011,59964,12796,38919,33525,32502,54905,35218, 13524, 5571,52739,26616,32010,33033,10630,30317,},
-{12402, 1102,49471,12441,36360,18741,28761,52897, 53133,64433,16064,53094,29175,46794,36774,12638,},
-{37345,44097,56401,  649,18485,45436,47975,47011, 28190,21438, 9134,64886,47050,20099,17560,18524,},
-{16694,26241,25986,37699,14430,46007, 5275,12618, 48841,39294,39549,27836,51105,19528,60260,52917,},
-{20906,28072,45652,28249,31183,45239,40101,63390, 44629,37463,19883,37286,34352,20296,25434, 2145,},
-{37778,41223,15886, 8898, 7382,50180,41144,32384, 27757,24312,49649,56637,58153,15355,24391,33151,},
-{ 3799,10532,28309,56460,20926, 6279,54590,14902, 61736,55003,37226, 9075,44609,59256,10945,50633,},
-{15690,56736,30198,47286,41321,11044,48546,51066, 49845, 8799,35337,18249,24214,54491,16989,14469,},
-{54846,47109,52109,51519,55200,21497, 7933,20198, 10689,18426,13426,14016,10335,44038,57602,45337,},
-{64177,56677,29155,12756,22501,42325,54629,17442,  1358, 8858,36380,52779,43034,23210,10906,48093,},
-{11201,38860,48704,61224,33899,23859,36892,20257, 54334,26675,16831, 4311,31636,41676,28643,45278,},
-{34372,16162,24155,17914,41538,57779,17422,42404, 31163,49373,41380,47621,23997, 7756,48113,23131,},
-};
-static uint16x16_t NTT_CT_butterfly_x8(uint16x16_t f, uint16x16_t zv, uint16x16_t wv, uint16x16_t q){
-    uint16x16_t a,b, z,w;
-    z = __builtin_shuffle(zv,(uint16x16_t){1,1,1,1, 1,1,1,1, 9,9,9,9, 9,9,9,9});
-    w = __builtin_shuffle(wv,(uint16x16_t){1,1,1,1, 1,1,1,1, 9,9,9,9, 9,9,9,9});
-    a = __builtin_shuffle(f, (uint16x16_t){0,1, 2, 3, 4, 5, 6, 7, 0,1, 2, 3, 4, 5, 6, 7});
-    b = __builtin_shuffle(f, (uint16x16_t){8,9,10,11,12,13,14,15, 8,9,10,11,12,13,14,15});
-    f = VADDM(a, VMULM(b, z, w, q), q);
-    z = __builtin_shuffle(zv,(uint16x16_t){2,2,2,2, 10,10,10,10, 3,3,3,3, 11,11,11,11});
-    w = __builtin_shuffle(wv,(uint16x16_t){2,2,2,2, 10,10,10,10, 3,3,3,3, 11,11,11,11});
-    a = __builtin_shuffle(f, (uint16x16_t){0,1,2,3, 0,1,2,3, 8, 9, 10,11,  8, 9,10,11});
-    b = __builtin_shuffle(f, (uint16x16_t){4,5,6,7, 4,5,6,7, 12,13,14,15, 12,13,14,15});
-    f = VADDM(a, VMULM(b, z, w, q), q);
-    z = __builtin_shuffle(zv,(uint16x16_t){4,4,12,12, 5,5,13,13, 6,6,14,14, 7,7,15,15});
-    w = __builtin_shuffle(wv,(uint16x16_t){4,4,12,12, 5,5,13,13, 6,6,14,14, 7,7,15,15});
-    a = __builtin_shuffle(f, (uint16x16_t){0,1,0,1, 4,5,4,5, 8, 9, 8, 9,  12,13,12,13});
-    b = __builtin_shuffle(f, (uint16x16_t){2,3,2,3, 6,7,6,7, 10,11,10,11, 14,15,14,15});
-    f = VADDM(a, VMULM(b, z, w, q), q);
-    return f;
-}
-// не сделано
-static uint16x16_t NTT_GS_butterfly_x8(uint16x16_t f, uint16x16_t zv, uint16x16_t wv, uint16x16_t q){
-    uint16x16_t a,b, z,w;
-    z = __builtin_shuffle(zv,(uint16x16_t){4,4,12,12, 5,5,13,13, 6,6,14,14, 7,7,15,15});
-    w = __builtin_shuffle(wv,(uint16x16_t){4,4,12,12, 5,5,13,13, 6,6,14,14, 7,7,15,15});
-    a = __builtin_shuffle(f, (uint16x16_t){0,1,0,1, 4,5,4,5, 8, 9, 8, 9,  12,13,12,13});
-    b = __builtin_shuffle(f, (uint16x16_t){2,3,2,3, 6,7,6,7, 10,11,10,11, 14,15,14,15});
-    f = VMULM(VADDM(a, b, q), z, w, q);
-    z = __builtin_shuffle(zv,(uint16x16_t){2,2,2,2, 10,10,10,10, 3,3,3,3, 11,11,11,11});
-    w = __builtin_shuffle(wv,(uint16x16_t){2,2,2,2, 10,10,10,10, 3,3,3,3, 11,11,11,11});
-    a = __builtin_shuffle(f, (uint16x16_t){0,1,2,3, 0,1,2,3, 8, 9, 10,11,  8, 9,10,11});
-    b = __builtin_shuffle(f, (uint16x16_t){4,5,6,7, 4,5,6,7, 12,13,14,15, 12,13,14,15});
-    f = VMULM(VADDM(a, b, q), z, w, q);
-    z = __builtin_shuffle(zv,(uint16x16_t){1,1,1,1, 1,1,1,1, 9,9,9,9, 9,9,9,9});
-    w = __builtin_shuffle(wv,(uint16x16_t){1,1,1,1, 1,1,1,1, 9,9,9,9, 9,9,9,9});
-    a = __builtin_shuffle(f, (uint16x16_t){0,1, 2, 3, 4, 5, 6, 7, 0,1, 2, 3, 4, 5, 6, 7});
-    b = __builtin_shuffle(f, (uint16x16_t){8,9,10,11,12,13,14,15, 8,9,10,11,12,13,14,15});
-    f = VMULM(VADDM(a, b, q), z, w, q);
-    return f;
-}
 uint16x2_t* NTT(uint16x2_t *f, const uint16_t *g){
     int i=1, len;
-    for (len=N/2; len>=VL; len>>=1)
+    for (len=N/2; len>VL; len>>=1)// 128, 64, 32
     for (int off=0; off<N; off+=2*len){
-        uint16_t z = zeta[i];//g^{BitRev7(i)} 
+        uint16_t z = xzv[i][0];//g^{BitRev7(i)} 
         i++;
         NTT_CT_butterfly(f+off/2, len, z);
     }
-#if VL>2 // len = {8,4,2} - три стадии для VL=16
     uint16x16_t q = VSET1(Q_PRIME);
-    for (int off=0, j=0; off<N; off+=2*len, j++){
-        uint16x16_t v = *(uint16x16_t*)(f+off/2);
-        v = NTT_CT_butterfly_x8(v, xzetav[j], wzetav[j], q);
-        *(uint16x16_t*)(f+off/2) = v;
-    }
-#endif
+    for (int off=0, j=0; off<N; off+=2*VL, j++)
+        NTT_CT_butterfly_2xVL((uint16x16_t*)(f+off/2), xzv[j], wzv[j], q);
     return f;
 }
 /*! \brief Algorithm 10 iNTT(𝑓) Computes inverse NTT of the polynomial representation 𝑓 ∈ 𝑅_𝑞 that corresponds to the given NTT representation 𝑓 ∈ 𝑇_𝑞. */
 uint16x2_t* iNTT(uint16x2_t *f, const uint16_t *g){
+    uint16x16_t q = VSET1(Q_PRIME);
+    for (int off=0, j=N/2/VL-1; off<N; off+=2*VL, j--)
+        NTT_GS_butterfly_2xVL((uint16x16_t*)(f+off/2), xzv[j], wzv[j], q);
+#if 0
     int i=N/2-1;
     int len;
-    for (len=2; len<=8; len<<=1)
+    for (len=2; len<=VL; len<<=1)
     for (int off=0; off<N; off+=2*len){
         uint16_t z = zeta[i];//g[BitRev7(i)]; 
         i--;
         NTT_GS_butterfly(f+off/2, len, z);
     }
-    for (; len<=N/2; len<<=1)
+#endif
+    int i=VL/2 -1;
+    for (int len =2*VL; len<=N/2; len<<=1)
     for (int off=0; off<N; off+=2*len){
-        uint16_t z = zeta[i];//g[BitRev7(i)]; 
+        uint16_t z = xzv[i][0];//zeta[i];//g[BitRev7(i)]; 
         i--;
         NTT_GS_butterfly(f+off/2, len, z);
     }
@@ -626,37 +733,60 @@ uint16x2_t BaseCaseMultiply(uint16x2_t a, uint16x2_t b, uint16_t g){
     c[1] = (a[1]*(uint32_t)b[0] + a[0]*(uint32_t)b[1]  ) % Q_PRIME;
     return c;
 }
-#if 0 // не сделано
-uint16x16_t BaseCaseMultiply_x16(uint16x16_t a, uint16x16_t b, uint16x16_t z, uint16x16_t w, uint16x16_t p, uint16x16_t u){
-    uint16x16_t b0 = __builtin_shufflevector(b, b, 0,0,2,2,4,4,6,6,8,8,10,10,12,12,14,14);
-    uint16x16_t b1 = __builtin_shufflevector(b, b, 1,1,3,3,5,5,7,7,9,9,11,11,13,13,15,15);
-    uint16x16_t a1 = __builtin_shufflevector(a, a, 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14);
-    r00 = VMULM_barrett(a0, b0, u, p);
-    r11 = VMULM_barrett(a1, b1, u, p);
-    r01 = VMULM_barrett(a0, b1, u, p);
-    r10 = VMULM_barrett(a1, b0, u, p);
-    r11 = VMULM(r11, z, w, p);
-    r00 = VADDM(r00, r11, p);
-    r11 = VADDM(r10, r01, p);
-    return {r00, r11};
+/*! \brief Algorithm 12 BaseCaseMultiply(𝑎0, 𝑎1, 𝑏0, 𝑏1, 𝛾) -- векторная версия 
+    - работает как умножение комплексных чисел, где 𝛾 - мнимая единица.
+    \param z - коэффициенты для умножения по модулю Q. 
+    \param w - коэффициенты для Shoup's multiplication. 
+    \param p - модуль Q. 
+    \param u - константа Барретта для умножения по модулю Q. 
+
+    \todo исключить перестановки вектора внутри функции, согласовать с выходом CT_Butterfly_2xVL. 
+ Можно сделать операцию (a0*b0 + a1*b1) mod q с одним редуцированием.
+ */
+static void BaseCaseMultiply_2xVL(uint16x16_t *a, uint16x16_t *b, uint16x16_t z, uint16x16_t w, uint16x16_t p, uint16x16_t u){
+/*  uint16x16_t a0 = __builtin_shufflevector(a[0], a[1], 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30);
+    uint16x16_t a1 = __builtin_shufflevector(a[0], a[1], 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31);
+    uint16x16_t b0 = __builtin_shufflevector(b[0], b[1], 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30);
+    uint16x16_t b1 = __builtin_shufflevector(b[0], b[1], 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31);
+*/
+    uint16x16_t r00 = VMULM_barrett(a[0], b[0], u, p);
+    uint16x16_t r11 = VMULM_barrett(a[1], b[1], u, p);
+    uint16x16_t r01 = VMULM_barrett(a[0], b[1], u, p);
+    uint16x16_t r10 = VMULM_barrett(a[1], b[0], u, p);
+                r11 = VMULM(r11, z, w, p);
+    uint16x16_t c0 = VADDM(r00, r11, p);
+    uint16x16_t c1 = VADDM(r10, r01, p);
+    a[0] = c0, a[1] = c1;
+//    a[0] = __builtin_shufflevector(c0, c1, 0,16,1,17,2,18,3,19,4,20,5,21,6,22,7,23);
+//    a[1] = __builtin_shufflevector(c0, c1, 8,24,9,25,10,26,11,27,12,28,13,29,14,30,15,31);
 }
-#endif
 /*! Algorithm 11 MultiplyNTTs(𝑓,𝑔)
     Computes the product (in the ring 𝑇_𝑞) of two NTT representations. 
     \param lda линейное смещение при умножении
  */
-void MultiplyNTTs(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned lda){
-
-    for (int i=0; i<N/VL; i++){
-        //BaseCaseMultiply_x16();
+static void MultiplyNTTs(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned lda){
+    if (lda!=1){
+        for (int i=0; i<N/2; i++)
+            h[i] = BaseCaseMultiply(a[i*lda], b[i],  zeta2[i]);
+    } else {
+        uint16x16_t p = VSET1(Q_PRIME);
+        uint16x16_t u = VSET1(U_BARRETT);
+        for (int i=0; i<N/2/VL; i++){
+            uint16x16_t* av = (uint16x16_t*)(a+VL*i);
+            uint16x16_t* bv = (uint16x16_t*)(b+VL*i);
+            uint16x16_t z = *(uint16x16_t*)( zeta2+VL*i);
+            uint16x16_t w = *(uint16x16_t*)(wzeta2+VL*i);
+            BaseCaseMultiply_2xVL(av, bv, z, w, p, u);
+        }
     }
-    for (int i=0; i<N/2; i++)
-        h[i] = BaseCaseMultiply(a[i*lda], b[i],  zeta2[i]);
 }
 // Dot product
 void dot(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned int k){
-    const unsigned int lda = 1;
-    MultiplyNTTs(h, a, b, lda);
+    const unsigned int lda = N/2;
+    for(int i=0;i<k/VL; i++){
+        MultiplyNTTs(h, a, b, 1);
+        h+=lda, a+=lda, b+=lda;
+    }
 }
 // Matrix mul vector
 void mv_mul(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned int k){
@@ -674,21 +804,223 @@ void mv_mult(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned int k){
         h+=lda, a+=lda, b+=lda;
     }
 }
-#if 0
-/*! 
-*/
-void K_PKE_Decrypt(uint8_t *ct, uint8_t *dk){
-
-    uint32_t* u = Decompress(ct, du);//
-    uint32_t* v = Decompress(ct+du*k, dv);
-    unsigned int n = du;
-    for (i = 0; i < k; i++){
-        vec_subm(v, v, w, du, q);
-        uint32_t* invNTT(s, NTT(u, gamma, du), )
-    }
+/*! \brief 
+    \param s - случайный вектор 256 бит (32 байта) 
+    \param eta - параметр распределения {2,3}
+    \return вектор 256 бит (32 байта)
+    */
+static uint8_t* PRF(uint8_t*tag, uint8_t* s, uint8_t i, int eta){
+    s[32] = i;
+//    uint8_t tag[64*eta];
+    shake256(s, 33, tag, 64*eta);
+    return tag;
 }
+/*! \brief 
+    \param dk_PKE ключ шифрования, k*384 байта= N*12бит
+    \param ct зашифрованный текст 32*(k*du+dv) байта
+    \param m расшифрованный текст 256 бит (32 байта)
+
+    параметры схемы:
+    k  -- размер матрицы A
+    du -- размер вектора u
+    dv -- размер вектора v
+*/
+#if 0
+uint8_t* K_PKE_Decrypt(uint8_t* m, uint8_t* ct, uint8_t* dk_PKE, int k, int du, int dv){
+    uint16x2_t u[N/2], s[N/2], v[N/2], w[N/2] = {0};
+    for (int i=0; i<k; i++){
+        Decompress(ByteDecode(u,ct+(N*du/8)*i,du), du);
+        NTT(u, zeta);
+        ByteDecode(s, dk_PKE+(N*12/8)*i, 12);
+        MultiplyNTTs(u, u, s, 1);
+        poly_add(w, w, u);// операция dot product
+    }
+    Decompress(ByteDecode(v,ct+(N*du/8)*k, dv), dv);
+    poly_sub(w, v, iNTT(w, zeta));
+    ByteEncode(m, Compress(w,1),1);
+    return m;
+}
+/*! \brief Алгоритм 14 Шифрование сообщения
+
+    Uses the encryption key to encrypt a plaintext message using the randomness 𝑟.
+    \param m не шифрованный текст 256 бит (32 байта)
+    \param ct зашифрованный текст 32*(k*du+dv) байта
+    \param dk_PKE ключ шифрования, k*384 байта= N*12бит
+    \param r рандомность 256 бит (32 байта)
+ */
+uint8_t* K_PKE_Encrypt(uint8_t* m, uint8_t* ct, uint8_t* dk_PKE, uint8_t* r,
+        int k, int du, int dv, int eta1, int eta2){
+    uint16x2_t u[N/2], s[N/2], v[N/2] = {0};
+    uint8_t b[32];
+    uint8_t* rho = dk_PKE + 384*k;
+    for (int i=0; i<k; i++){
+        SamplePolyCBD(u,  PRF(r,  i, eta1), eta1, Q_PRIME);
+         NTT(u, zeta);
+        uint16x2_t* a=s;
+        SampleNTT(a, rho, i);// столбец матрицы A|j|i
+        MultiplyNTTs(u,u,a,1);
+        iNTT(u, zeta);
+        uint16x2_t *e1 = s;
+        SamplePolyCBD(e1, PRF(r,k+i, eta2), eta2, Q_PRIME);
+        poly_add(s, u, e1);
+        ByteEncode(ct+(N*du/8)*i, Compress(s,du),du);
+        ByteDecode(s, dk_PKE+(N*12/8)*i, 12);
+        MultiplyNTTs(u, u, s, 1);
+        poly_add(v, v, u);// операция dot product
+    }
+    iNTT(v, zeta);
+    uint16x2_t *e2 = s;
+    SamplePolyCBD(e2, PRF(r,k+k, eta2), eta2, Q_PRIME);
+    poly_add(v, v, e2);
+    uint16x2_t *mu = s;
+    mu = Decompress(ByteDecode(mu, m, 1), 1);
+    poly_add(v, v, mu);
+    ByteEncode(ct+(N*du/8)*k, Compress(v,dv),dv);
+    return ct;
+}
+
 #endif
+
 #include <stdio.h>
+
+// удалить
+static uint8_t BitRev7(uint8_t x);
+static void v_print(uint16x16_t f, uint16x16_t g){
+    for (size_t i = 0; i < 16; i++){
+        printf("%2d,", f[i]);
+    }
+    printf(" ");
+    for (size_t i = 0; i < 16; i++){
+        printf("%2d,", g[i]);
+    }
+    printf("\n");
+    
+}
+// этот тестовый пример для отладки перестановок векторов в NTT_CT_butterfly_2xVL
+static void NTT_CT_butterfly_2xVL_test(){
+    uint16x16_t a,b;
+    uint16x16_t p = VSET1(Q_PRIME);
+    uint16x16_t z = VSET1(17);
+    uint16x16_t w = VSET1(334);
+    uint16x16_t f = { 0, 1, 2, 3,  4, 5, 6, 7,  8, 9,10,11, 12,13,14,15};
+    uint16x16_t g = {16,17,18,19, 20,21,22,23, 24,25,26,27, 28,29,30,31};
+    v_print(f,g);
+        z = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+        w = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8, 9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    v_print(f,g);
+        z = __builtin_shuffle(z, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
+        w = __builtin_shuffle(w, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1, 2, 3,  8, 9,10,11, 16,17,18,19, 24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){4, 5, 6, 7, 12,13,14,15, 20,21,22,23, 28,29,30,31});
+    v_print(f,g);
+        z = __builtin_shuffle(z, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
+        w = __builtin_shuffle(w, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1, 4, 5,  8, 9,12,13, 16,17,20,21, 24,25,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){2, 3, 6, 7, 10,11,14,15, 18,19,22,23, 26,27,30,31});
+    v_print(f,g);
+        z = __builtin_shuffle(z, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
+        w = __builtin_shuffle(w, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 2, 4, 6,  8,10,12,14, 16,18,20,22, 24,26,28,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1, 3, 5, 7,  9,11,13,15, 17,19,21,23, 25,27,29,31});
+    v_print(f,g);// обратный проход
+
+    int res =1;// проверка правильности перестановки
+    for (int i=0;i<16;i++) res = res && (BitRev7(i)>>2)==f[i];
+    for (int i=0;i<16;i++) res = res && (BitRev7(i+16)>>2)==g[i];
+    if (res) printf(".. ok\n");
+
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 1,17,  2,18, 3,19,  4,20, 5,21,  6,22, 7,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,24, 9,25, 10,26,11,27, 12,28,13,29, 14,30,15,31});
+
+    v_print(f,g);
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1,16,17,  2, 3,18,19,  4, 5,20,21,  6, 7,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8, 9,24,25, 10,11,26,27, 12,13,28,29, 14,15,30,31});
+    v_print(f,g);
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1, 2, 3, 16,17,18,19,  4, 5, 6, 7, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8, 9,10,11, 24,25,26,27, 12,13,14,15, 28,29,30,31});
+    v_print(f,g);
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8, 9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    v_print(f,g);
+// эти вращения применяются в NTT_CT_butterfly_2xVL и NTT_GS_butterfly_2xVL -- они обратимы
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    printf("sh 1: ");v_print(f,g);
+    a = f, b = g;
+    f = __builtin_shufflevector(a, b, 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30);
+    g = __builtin_shufflevector(a, b, 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31);
+    a = f, b = g;
+    f = __builtin_shufflevector(a, b, 0,16,1,17,2,18,3,19,4,20,5,21,6,22,7,23);
+    g = __builtin_shufflevector(a, b, 8,24,9,25,10,26,11,27,12,28,13,29,14,30,15,31);
+    printf("sh 2: ");v_print(f,g);
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1,16,17,  2, 3,18,19,  4, 5,20,21,  6, 7,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8, 9,24,25, 10,11,26,27, 12,13,28,29, 14,15,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1,4,5,  8, 9,12,13, 16,17,20,21, 24,25,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){2, 3,6,7, 10,11,14,15, 18,19,22,23, 26,27,30,31});
+    printf("sh 3: ");v_print(f,g);
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    printf("sh 4: ");v_print(f,g);
+
+
+#if 0 
+// две операции заменяются на одну...
+    a = f, b = g;
+    f = __builtin_shuffle(a, b, (uint16x16_t){0, 1,16,17,  2, 3,18,19,  4, 5,20,21,  6, 7,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8, 9,24,25, 10,11,26,27, 12,13,28,29, 14,15,30,31});
+    a = f, b = g;
+    f = __builtin_shufflevector(a, b, 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30);
+    g = __builtin_shufflevector(a, b, 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31);
+    printf("sh 1: ");v_print(f,g);
+#endif
+
+}
+
+
 static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
 {
 	uint32_t r = b;
@@ -824,7 +1156,7 @@ int main(int argc, char** argv)
         wzeta2[i] = w;
     }
     for (int i=0; i<N/2; i+=2){
-        printf("%4d,%5d,", zeta2[i], zeta2[i+1]-Q_PRIME);
+        printf("%4d,%5d,", zeta2[i], zeta2[i+1]);
         if (i%8 ==6) printf("\n");
     }
     printf("wzeta2=\n");
@@ -939,40 +1271,61 @@ if (1) {// проверка умножения полиномов
     }
     if (1) {// расчет коэффициентов Shoup для операции NTT_CT_butterfly_x8
         uint16_t g,w;
-        printf("xzeta[]=\n");
-        int L=16, vl=8;
+        printf("xzetav[]=\n");
+        int L=8, vl=16;
         for (int k=0; k<L; k++){
             int i = L+k;
-//            printf("[%d]={", k);
             g = POWM(ZETA, BitRev7(k), Q_PRIME);
             w = ((uint32_t)(g) <<16)/Q_PRIME;
-            printf("{%5d,", g);
+            printf("{%2d,", k);
+//            printf("{%5d,", g);
             for (int len=vl, l=0; len>=2; len>>=1, l++){// стадия разложения длина
                 for (int offs=0,j=0; offs<vl; offs+=len, j++){// смещение число шагов N/2len
-                    //printf("%2d ", i+j);
                     g = POWM(ZETA, BitRev7(i+j), Q_PRIME);
                     w  = ((uint32_t)g <<16)/Q_PRIME;
-                    printf("%5d,", g);
+//                    printf("%5d,", g);
+                    printf("%2d ", i+j);
                 }
                 i += (L+k)<<l;
             }
-            g = Q_PRIME-POWM(ZETA, BitRev7(k), Q_PRIME);
+            printf("},\n");
+        }
+        printf("wzetav[]=\n");
+        for (int k=0; k<L; k++){
+            int i = L+k;
+            g = POWM(ZETA, BitRev7(k), Q_PRIME);
             w = ((uint32_t)(g) <<16)/Q_PRIME;
-            printf(" %5d,", g);
-            i=L+k;
+//            printf("{%2d,", k);
+            printf("{%5d,", w);
             for (int len=vl, l=0; len>=2; len>>=1, l++){// стадия разложения длина
                 for (int offs=0,j=0; offs<vl; offs+=len, j++){// смещение число шагов N/2len
-                    //printf("-%2d ", i+j);
-                    g = Q_PRIME-POWM(ZETA, BitRev7(i+j), Q_PRIME);
-                    w = ((uint32_t)(g) <<16)/Q_PRIME;
-                    printf("%5d,", g);
+                    g = POWM(ZETA, BitRev7(i+j), Q_PRIME);
+                    w  = ((uint32_t)g <<16)/Q_PRIME;
+                    printf("%5d,", w);
+//                    printf("%2d ", i+j);
                 }
                 i += (L+k)<<l;
             }
             printf("},\n");
         }
     }
-
+    if (1) {
+        NTT_CT_butterfly_2xVL_test();
+        uint16x16_t p = VSET1(Q_PRIME);
+        uint16x16_t u = VSET1(U_BARRETT);
+        uint16x16_t v, b;
+        for (int i=0; i<8; i++){
+            b = p - xzv[7-i];
+            b = __builtin_shuffle(b, (uint16x16_t){0,1,3,2,7,6,5,4,15,14,13,12,11,10,9,8});
+            v = VMULM_barrett(xzv[i], b, u, p);
+            for(int j=1; j<16; j++){
+                printf("%4d,", v[j]);
+            }
+            printf("\n");
+        }
+        printf("\n");
+        return 0;
+    }
 
     if (1) {// проверка редукции Барретта
         uint32_t p = Q_PRIME;
