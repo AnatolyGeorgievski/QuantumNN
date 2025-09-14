@@ -100,7 +100,7 @@ extern void sha3_512(uint8_t *data, size_t len, uint8_t *tag);
 #define Q_MONT  53249
 #endif
 
-typedef uint16_t uint16x2_t  __attribute__((vector_size(4)));
+typedef uint16_t uint16x2_t __attribute__((vector_size(4)));
 typedef  int16_t  int16x2_t __attribute__((vector_size(4)));
 
 typedef uint16_t uint16x16_t __attribute__((vector_size(32)));
@@ -115,8 +115,9 @@ typedef uint16_t uint16x32_t __attribute__((vector_size(64)));
  */
 uint32_t shoup_div(uint32_t b){
 #if Q_PRIME == 3329
+//    return (((b*0xBB41uL)>>16) + b*0x9D7DuL)>>(43-32);
     return (b*0x9D7DBB41uLL)>>(43-16);
-//  return (((b*0x3AFB7681uLL)>>16) +b)>>12;
+//    return (((b*0x3AFB7681uLL)>>16) +(b<<16))>>(44-32);
 #elif Q_PRIME == 12289
     return (b*0xAAA71C85uLL)>>(45-16);
 #else
@@ -160,16 +161,8 @@ static inline uint16x32_t VMULM(uint16x32_t a, uint16x32_t b, uint16x32_t w, uin
     __m512i r0= _mm512_mullo_epi16((__m512i)a, (__m512i)b);
     __m512i r1= _mm512_mullo_epi16(q, (__m512i)p);
     r0 = _mm512_sub_epi16(r0, r1);
-    r1 = _mm512_add_epi16(r0, (__m512i)p);
+    r1 = _mm512_sub_epi16(r0, (__m512i)p);
     return (uint16x32_t)_mm512_min_epu16(r0, r1);
-}
-static inline uint16x32_t VMULM_mont(uint16x32_t a, uint16x32_t b, uint16x32_t qm, uint16x32_t q){
-    __m512i z1 = _mm512_mulhi_epu16((__m512i)a, (__m512i)b);
-    __m512i z0 = _mm512_mullo_epi16((__m512i)a, (__m512i)b);
-    __m512i m  = _mm512_mullo_epi16(z0, (__m512i)qm);
-    __m512i t1 = _mm512_mulhi_epu16(m,  (__m512i)q);
-    __m512i r  = _mm512_add_epi16(z1, t1);
-    return (uint16x32_t)_mm512_min_epu16(r, _mm512_sub_epi16(r, (__m512i)q));
 }
 static inline uint16x32_t VMULM_barrett(uint16x32_t a, uint16x32_t b, uint16x32_t u, uint16x32_t q){
     __m512i z1 = _mm512_mulhi_epu16((__m512i)a, (__m512i)b);
@@ -188,6 +181,10 @@ static inline uint16x32_t VMULM_barrett(uint16x32_t a, uint16x32_t b, uint16x32_
 #elif defined(__AVX2__)
 #define VL 16
 #define VSET1(x) {x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x}
+
+static inline uint16x16_t VMOD1(uint16x16_t r, uint16x16_t p){
+    return (uint16x16_t)_mm256_min_epu16((__m256i)r, _mm256_sub_epi16((__m256i)r, (__m256i)p));
+}
 static inline uint16x16_t VADDM(uint16x16_t a, uint16x16_t b, uint16x16_t p){
     __m256i r = _mm256_add_epi16((__m256i)a, (__m256i)b);
     return (uint16x16_t)_mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)p));
@@ -201,20 +198,10 @@ static inline uint16x16_t VMULM(uint16x16_t a, uint16x16_t b, uint16x16_t w, uin
     __m256i q = _mm256_mulhi_epu16((__m256i)a, (__m256i)w);
     __m256i r0= _mm256_mullo_epi16((__m256i)a, (__m256i)b);
     __m256i r1= _mm256_mullo_epi16(q, (__m256i)p);
-    r0 = _mm256_sub_epi16(r0, r1);// тут могут быть отрицательные значения
-    __m256i r = _mm256_min_epu16(r0, _mm256_add_epi16(r0, (__m256i)p));
+    __m256i r = _mm256_sub_epi16(r0, r1);
+// эта операция не требуется? 
+//    __m256i r = _mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)p));
     return (uint16x16_t)r;
-}
-/*! Montgomery multiplication with precomputed qm = -q^{-1} mod 2^{16} 
-    \return a*b\beta^{-1} mod q 
- */
-static inline uint16x16_t VMULM_mont(uint16x16_t a, uint16x16_t b, uint16x16_t qm, uint16x16_t q){
-    __m256i z1 = _mm256_mulhi_epu16((__m256i)a, (__m256i)b);
-    __m256i z0 = _mm256_mullo_epi16((__m256i)a, (__m256i)b);
-    __m256i m  = _mm256_mullo_epi16(z0, (__m256i)qm);
-    __m256i t1 = _mm256_mulhi_epu16(m,  (__m256i)q);
-    __m256i r  = _mm256_add_epi16(z1, t1);
-    return (uint16x16_t)_mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)q));
 }
 /*! \brief Barrett reduction
     \param a multiplicand
@@ -243,11 +230,11 @@ static inline uint16x16_t VROTL(uint16x16_t a, uint16x16_t b){
 #else // Векторизация не используется
 #define VL 2
 #define VSET1(x) {x,x}
-static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w);
+static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w, uint16_t p);
 static uint16x2_t VMULM(uint16x2_t a, uint16x2_t b, uint16x2_t w, uint16x2_t q){
     uint16x2_t r;
-    r[0] = shoup_MULM(a[1], b[0], w[0]);
-    r[1] = shoup_MULM(a[1], b[1], w[1]);
+    r[0] = shoup_MULM(a[1], b[0], w[0], Q_PRIME);
+    r[1] = shoup_MULM(a[1], b[1], w[1], Q_PRIME);
     return r;
 }
 static inline uint16x2_t VROTL(uint16x2_t a, uint16x2_t b){
@@ -275,19 +262,17 @@ static inline int16_t  mont_MULM(int16_t a, int16_t b){
     int32_t q = Q_PRIME;
     int16_t p = Q_MONT; // mod_inverse(Q_PRIME); // 1/q mod 2^{32}
     int16_t m = z0 * p; // low product z_0 (1/q)
-    //printf("z=%x, mq=%x %x %x\n", z, m*q, (z>>16)-(m*q)>>16, (z - (m*q))>>16);
-    z = (z + (m*q))>>16; // high product
+    z = (z + m*q)>>16; // high product
     if (z<0) z+=q;
+    
     return  (int16_t)z;
 }
-static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w){
+static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w, uint16_t p){
     uint16_t q = (a*(uint32_t)w)>>16;
     int16_t r0= (a*b);
-    int16_t r1=  q*Q_PRIME;
-    int16_t r = r0 - r1;
-//    if (r<0) r+=Q_PRIME;
-    if (r>=Q_PRIME) r-=Q_PRIME;
-    return r;// (r+Q_PRIME<r)? r+Q_PRIME: r;
+    int16_t r1=  q*p;
+    uint16_t r = r0 - r1;
+    return ((uint16_t)(r-p)<r)? r-p:r;
 }
 static inline void vec_mulm_u(uint16x2_t* r_, const uint16x2_t* a_, uint16_t b, unsigned int len){
     uint16x16_t* r = (uint16x16_t*)r_;
@@ -297,7 +282,7 @@ static inline void vec_mulm_u(uint16x2_t* r_, const uint16x2_t* a_, uint16_t b, 
     uint16x16_t bv = VSET1(b);
     uint16x16_t prime = VSET1(Q_PRIME);
     for(int i=0; i<len/VL; i++){
-        r[i] = VMULM(a[i], bv, wv, prime);
+        r[i] = VMOD1(VMULM(a[i], bv, wv, prime),prime);
     }
 }
 static inline 
@@ -310,7 +295,7 @@ void vec_xtime_madd(uint16x16_t* r, uint16x16_t* a, uint16_t b, unsigned int len
     for (int i=0; i<len/VL; i++){
         uint16x16_t v = VROTL(r[i], c);
         c = r[i];
-        r[i] = VADDM(v, VMULM(a[i],bv,wv, p), p);
+        r[i] = VADDM(v, VMOD1(VMULM(a[i],bv,wv, p),p), p);
     }
 }
 // Сложение полиномов по модулю
@@ -548,21 +533,21 @@ void NTT_CT_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16
     zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
     wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
     g = VMULM(g, zv,wv, p);
-        a = f+g;//VADDM(f, g, p);
+        a = VADDM(f, g, p);
         b = f+p-g;//VSUBM(f, g, p);
     f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
     g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
     zv = __builtin_shuffle(z, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
     wv = __builtin_shuffle(w, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
     g = VMULM(g, zv,wv, p);
-        a = f+g;//VADDM(f, g, p);
+        a = VADDM(f, g, p);
         b = f+p-g;//VSUBM(f, g, p);
     f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
     g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
     zv = __builtin_shuffle(z, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
     wv = __builtin_shuffle(w, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
     g = VMULM(g, zv,wv, p);
-        a = f+g;//VADDM(f, g, p);
+        a = VADDM(f, g, p);
         b = f+p-g;//VSUBM(f, g, p);
     f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
     g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
@@ -570,7 +555,7 @@ void NTT_CT_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16
     wv = __builtin_shuffle(w, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
     g = VMULM(g, zv,wv, p);
         a = VADDM(f, g, p);
-        b = VSUBM(f, g, p);
+        b = f+p-g;//VSUBM(f, g, p);
     f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
     g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
     f_[0] = f, f_[1] = g;
@@ -727,11 +712,21 @@ uint16x2_t* iNTT(uint16x2_t *f, const uint16_t *g){
 /*! \brief Algorithm 12 BaseCaseMultiply(𝑎0, 𝑎1, 𝑏0, 𝑏1, 𝛾) 
 
  - работает как умножение комплексных чисел, где 𝛾 - мнимая единица. */
-uint16x2_t BaseCaseMultiply(uint16x2_t a, uint16x2_t b, uint16_t g){
+static uint16x2_t BaseCaseMultiply(uint16x2_t a, uint16x2_t b, uint16_t g){
     uint16x2_t c;
     c[0] = (a[0]*(uint32_t)b[0] + a[1]*(((uint32_t)b[1]*g)%Q_PRIME)) % Q_PRIME;
     c[1] = (a[1]*(uint32_t)b[0] + a[0]*(uint32_t)b[1]  ) % Q_PRIME;
     return c;
+}
+/*! \brief Переводит внешнее представление вектора в внутреннее представление 
+    внешнее - сопряженные пары значений, внутреннее - сопряженные вектора
+ */
+static inline uint16x2_t* V(uint16x2_t *a){
+    uint16x16_t *v = (uint16x16_t*)a;
+    uint16x16_t f = __builtin_shufflevector(v[0], v[1], 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30);
+    uint16x16_t g = __builtin_shufflevector(v[0], v[1], 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31);
+    v[0] = f, v[1] = g;
+    return a;
 }
 /*! \brief Algorithm 12 BaseCaseMultiply(𝑎0, 𝑎1, 𝑏0, 𝑏1, 𝛾) -- векторная версия 
     - работает как умножение комплексных чисел, где 𝛾 - мнимая единица.
@@ -754,6 +749,7 @@ static void BaseCaseMultiply_2xVL(uint16x16_t *a, uint16x16_t *b, uint16x16_t z,
     uint16x16_t r01 = VMULM_barrett(a[0], b[1], u, p);
     uint16x16_t r10 = VMULM_barrett(a[1], b[0], u, p);
                 r11 = VMULM(r11, z, w, p);
+                //r11 = VMOD1(r11, p);
     uint16x16_t c0 = VADDM(r00, r11, p);
     uint16x16_t c1 = VADDM(r10, r01, p);
     a[0] = c0, a[1] = c1;
@@ -780,39 +776,26 @@ static void MultiplyNTTs(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned l
         }
     }
 }
-// Dot product
-void dot(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned int k){
-    const unsigned int lda = N/2;
-    for(int i=0;i<k/VL; i++){
-        MultiplyNTTs(h, a, b, 1);
-        h+=lda, a+=lda, b+=lda;
-    }
-}
-// Matrix mul vector
-void mv_mul(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned int k){
-    const unsigned int lda = N/2;
-    for(int i=0;i<k; i++) {
-        MultiplyNTTs(h, a, b, lda);
-        h+=lda, a++, b+=lda;
-    }
-}
-// Matrix^T mul vector MV с транспонированием матрицы A
-void mv_mult(uint16x2_t *h, uint16x2_t *a, uint16x2_t *b, unsigned int k){
-    const unsigned int lda = N/2;
-    for(int i=0;i<k; i++){
-        MultiplyNTTs(h, a, b, 1);
-        h+=lda, a+=lda, b+=lda;
-    }
-}
-/*! \brief 
+/*! \brief Функция генерации псевдослучайного вектора
     \param s - случайный вектор 256 бит (32 байта) 
     \param eta - параметр распределения {2,3}
     \return вектор 256 бит (32 байта)
     */
 static uint8_t* PRF(uint8_t*tag, uint8_t* s, uint8_t i, int eta){
     s[32] = i;
-//    uint8_t tag[64*eta];
     shake256(s, 33, tag, 64*eta);
+    return tag;
+}
+static uint8_t* H(uint8_t*tag, uint8_t* s, size_t len){
+    sha3_256(s, len, tag);
+    return tag;
+}
+static uint8_t* G(uint8_t*tag, uint8_t* s, size_t len){
+    sha3_512(s, len, tag);
+    return tag;
+}
+static uint8_t* J(uint8_t*tag, uint8_t* s, uint8_t len){
+    shake256(s, len, tag, 32);
     return tag;
 }
 /*! \brief 
@@ -825,21 +808,21 @@ static uint8_t* PRF(uint8_t*tag, uint8_t* s, uint8_t i, int eta){
     du -- размер вектора u
     dv -- размер вектора v
 */
-#if 0
 uint8_t* K_PKE_Decrypt(uint8_t* m, uint8_t* ct, uint8_t* dk_PKE, int k, int du, int dv){
     uint16x2_t u[N/2], s[N/2], v[N/2], w[N/2] = {0};
     for (int i=0; i<k; i++){
-        Decompress(ByteDecode(u,ct+(N*du/8)*i,du), du);
+        Decompress(ByteDecode((uint16_t*)u,ct+(N*du/8)*i,du), du);
         NTT(u, zeta);
-        ByteDecode(s, dk_PKE+(N*12/8)*i, 12);
-        MultiplyNTTs(u, u, s, 1);
+        ByteDecode((uint16_t*)s, dk_PKE+(N*12/8)*i, 12);
+        MultiplyNTTs(u, u, V(s), 1);
         poly_add(w, w, u);// операция dot product
     }
-    Decompress(ByteDecode(v,ct+(N*du/8)*k, dv), dv);
+    Decompress(ByteDecode((uint16_t*)v,ct+(N*du/8)*k, dv), dv);
     poly_sub(w, v, iNTT(w, zeta));
-    ByteEncode(m, Compress(w,1),1);
+    ByteEncode(m, Compress((uint16_t*)w,1),1);
     return m;
 }
+#if 0
 /*! \brief Алгоритм 14 Шифрование сообщения
 
     Uses the encryption key to encrypt a plaintext message using the randomness 𝑟.
@@ -1089,11 +1072,12 @@ int main(int argc, char** argv)
 {
     uint32_t qm = mod_inverse(Q_PRIME);
     printf ("Q_PRIME = %d, Q_MONT =%d %d Ur=%d\n", Q_PRIME, qm, (Q_PRIME*qm)&0xFFFF, U_BARRETT);
-    int nd;
+    int nd, nd0;
     uint32_t Q_DIV =div_c(Q_PRIME, &nd);
+    uint32_t Q_DIV_C0 =div_c0(Q_PRIME, &nd0);
     int s = 8;
     //Q_DIV = (Q_DIV +(0u<<(s-1)))>>s; nd-=s;
-    printf ("Q_DIV = x%04X>>%d\n", Q_DIV, nd);
+    printf ("Q_DIV = x%04X>>%d, C0=x%04X>>%d\n", Q_DIV, nd, Q_DIV_C0, nd0);
     for (uint32_t a=0; a<=0xFFFF; a++){
         uint32_t r = ((uint64_t)Q_DIV*(a<<16))>>nd;
         if (r!=(a<<16)/Q_PRIME) {
@@ -1309,7 +1293,7 @@ if (1) {// проверка умножения полиномов
             printf("},\n");
         }
     }
-    if (1) {
+    if (0) {
         NTT_CT_butterfly_2xVL_test();
         uint16x16_t p = VSET1(Q_PRIME);
         uint16x16_t u = VSET1(U_BARRETT);
@@ -1326,45 +1310,61 @@ if (1) {// проверка умножения полиномов
         printf("\n");
         return 0;
     }
-
-    if (1) {// проверка редукции Барретта
+#if 0
+    if (0) {// проверка редукции Монтгомери
         uint32_t p = Q_PRIME;
         printf("Montgomery q=%d, qm=%d\n", p, Q_MONT);
         uint16x16_t P = VSET1(Q_PRIME);
-        uint16x16_t qm = VSET1(-Q_MONT);
+        uint16x16_t qm = VSET1(Q_MONT);
         uint16_t r;
         for (uint16_t a=0; a<p; a++){
             for (uint16_t b=0; b<p; b++){
                 uint16x16_t av = VSET1(a);
                 uint16x16_t bv = VSET1(b);
                 uint16x16_t r = VMULM_mont(av,bv, qm, P);
-                if (((uint32_t)r[0]<<16)%Q_PRIME != (a*(uint32_t)b)%p) {
-                    printf("fail vmont mul %d * %d = %d != %d\n", a, b, r, (a*(uint32_t)b)%p);
+                if (((int32_t)r[0]<<16)%Q_PRIME != (a*(uint32_t)b)%p) {
+                    printf("fail vmont mul %d * %d = %d != %d\n", a, b, ((int32_t)r[0]<<16)%Q_PRIME, (a*(uint32_t)b)%p);
                     //break;
-                    return 0;
+                    //return 0;
                 }
             }
         }
         printf("Montgomery OK\n");
     }
-
+#endif
     if (1) {// проверка умножения методом Монтгомери
-        uint16_t r;
-        for (uint16_t a=0; a<0x7FFF; a++){
-            for (uint16_t b=0; b<0x7FFF; b++){
+        uint16_t qm = -mod_inverse(Q_PRIME);
+        printf("Mont q=%d qm=%d\n", Q_PRIME, qm);
+        int16_t r;
+        for (int16_t a=0; a<0x7FFF; a++){
+            for (int32_t b=0; b<=0x7FFF; b++){
                 r = mont_MULM(a, b);
-                if (((uint32_t)r<<16)%Q_PRIME != (a*(uint32_t)b)%Q_PRIME) 
+                if (((int32_t)r<<16)%Q_PRIME != (a*(int32_t)b)%Q_PRIME) 
                     printf("fail mont mul %d * %d = %d != %d\n", a, b, r, (a*b)%Q_PRIME);
             }
         }            
     }
     if (1) {// проверка умножения методом Shoup
-        for (uint16_t a=0; a<0xFFFE; a++){
+        printf("Shoup q=%d\n", Q_PRIME);
+        for (uint32_t a=0; a<0xFFFF; a++){
             for (uint16_t b=0; b<Q_PRIME; b++){
-                uint16_t w = ((uint32_t)b<<16)/Q_PRIME;
-                uint16_t r = shoup_MULM(a, b, w);
+                uint16_t w = shoup_div(b);//((uint32_t)b<<16)/Q_PRIME;
+                uint16_t r = shoup_MULM(a, b, w, Q_PRIME);
                 if (r != (a*(uint32_t)b)%Q_PRIME) 
                     printf("fail shoup mul %d * %d = %d != %d\n", a, b, r, (a*b)%Q_PRIME);
+            }
+        }            
+    }
+    if (1) {// проверка умножения методом Shoup
+        uint16_t p = Q_PRIME2;
+        printf("Shoup q=%d\n", p);
+        for (uint32_t a=0; a<0xFFFF; a++){
+            for (uint16_t b=0; b<p; b++){
+                //uint16_t w = ((uint32_t)b<<16)/p;
+                uint16_t w = (b*0xAAA71C85uLL)>>(45-16);
+                uint16_t r = shoup_MULM(a, b, w, p);
+                if (r != (a*(uint32_t)b)%p) 
+                    printf("fail shoup mul %d * %d = %d != %d\n", a, b, r, (a*b)%p);
             }
         }            
     }
