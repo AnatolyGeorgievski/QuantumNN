@@ -26,11 +26,12 @@ _Анатолий М. Георгиевский_
     * R1CS: Rank-1 Constraint System
     * Обобщение задачи на рациональные функции и операторы
 * Математика для вычислений на кольце полиномов
-    * Циклотомические полиномы
+    * [Циклотомические полиномы](#)
     * Прямое и обратное теоретико-числовое преобразование (NTT)
     * Негациклическая свертка на кольце
     * Поиск примитивного корня k-й степени по модулю простого числа
     * Умножение полиномов методом Карацубы
+    * [Система остаточных классов (RNS)](#residue-number-system-rns)
 
 * R-LWE Cryptographic Algorithms
     * [Алг 1. PKC на базе Ring-LWE](#algorithm-1-r-lwe-public-key-cryptosystem)
@@ -296,7 +297,7 @@ P(m_1, ... , m_n) = D_k(\tilde{P}(E_k(m_1), ... , E_k(m_n)))~.
 Brakerski/Fan-Vercauteren [Bra12, FV12] scheme, a Ring-Learning With Errors (Ring-LWE)-based crypto-system. Позволяет восстановить данные после шифрования и обладает свойствами пост-квантовой криптографии. 
 
 * (https://people.csail.mit.edu/rivest/Rsapaper.pdf) R.L. Rivest, at al., A Method for Obtaining Digital Signatures and Public-Key Cryptosystems, 1978
-* (https://crypto.stanford.edu/craig/craig-thesis.pdf)
+* (https://crypto.stanford.edu/craig/craig-thesis.pdf) Craig Gentry. A FULLY HOMOMORPHIC ENCRYPTION SCHEME. 2009
 * (https://www.cs.cmu.edu/~odonnell/hits09/gentry-homomorphic-encryption.pdf)
 * [[2009/547](https://eprint.iacr.org/2009/547.pdf)] Non-Interactive Verifiable Computing: Outsourcing Computation to Untrusted Workers
 
@@ -306,7 +307,7 @@ Brakerski/Fan-Vercauteren [Bra12, FV12] scheme, a Ring-Learning With Errors (Rin
 3. $\mathrm{Compute}_{pk}(\sigma_x) \to \sigma_y$ - вычисления выполняются удаленно с использованием зашифрованных входных данных.
 4. $\mathrm{Verify}_{sk}(\sigma_y, \tau_x) \to y=F(x)$ в результате проверки восстанавливается результат или устанавливается, что результат не является валидным значением функции.
 
-* (https://cims.nyu.edu/~regev/papers/pqc.pdf) Lattice-based Cryptography
+* (https://cims.nyu.edu/~regev/papers/pqc.pdf) D. Micciancio, O. Regev. Lattice-based Cryptography
 * [[2011/277](https://eprint.iacr.org/2011/277.pdf)] Zvika Brakerski, Craig Gentry, Vinod Vaikuntanathan. Fully Homomorphic Encryption without Bootstrapping, 2011
 * [[2011/344](https://eprint.iacr.org/2011/344.pdf)] Zvika Brakerski, Vinod Vaikuntanathan. Efficient Fully Homomorphic Encryption from (Standard) LWE, 2011
 * [[2012/078](https://eprint.iacr.org/2012/078.pdf)] Zvika Brakerski. Fully Homomorphic Encryption without Modulus Switching from Classical GapSVP, 2012
@@ -316,12 +317,18 @@ Encryption, 2012
 > GSW (Gentry-Sahai-Waters) — это схема гомоморфного шифрования, основана на проблеме Learning With Errors (LWE). GSW использует матричный подход, где шифротекст представляет собой матрицу, а гомоморфные операции (сложение и умножение) выполняются через матричные вычисления. 
 
 * [[2014/816](https://eprint.iacr.org/2014/816.pdf)] FHEW: Bootstrapping Homomorphic Encryption in less than a second
+> В контексте схем гомоморфного шифрования _bootstrapping_ (перезапуск или самозапуск) — это процесс, который позволяет увеличить глубину вычислений над зашифрованными данными. Он используется в полностью гомоморфных схемах шифрования (FHE), где после определённого количества операций над шифротекстом уровень шума (noise) может превысить допустимый предел, что делает данные недекодируемыми.
+
 * [[2016/421](https://eprint.iacr.org/2016/421.pdf)] J.H. Cheon, at al. Homomorphic Encryption for Arithmetic of Approximate Numbers
 > CKKS (Cheon-Kim-Kim-Song) — это схема полностью гомоморфного шифрования (FHE), предназначенная для эффективных вычислений с вещественными числами. Она позволяет выполнять операции сложения, умножения и другие над зашифрованными данными, не раскрывая исходную информацию.
 
 * [[2016/837](https://eprint.iacr.org/2016/837.pdf)] J.H. Cheon and D. Stehle. Fully Homomorphic Encryption over the Integers Revisited, 2016
+
+* [[2018/117](https://eprint.iacr.org/2018/117.pdf)] An Improved RNS Variant of the BFV Homomorphic Encryption Scheme
 * [[2018/931](https://eprint.iacr.org/2018/931.pdf)] J.H. Cheon, at al. A Full RNS Variant of Approximate Homomorphic Encryption
 > В этой работе представлен вариант приближенного гомоморфного шифрования, который оптимален для реализации на стандартных компьютерных системах. Вводится новая структура модуля шифротекста, которая позволяет использовать как разложение циклотомических многочленов в RNS, так и преобразование NTT на каждом из компонентов RNS.
+
+Residue Number System (RNS) — это система представления чисел, в которой целое число выражается набором его остатков от деления на несколько взаимно простых модулей.
 
 * [[2018/039](https://eprint.iacr.org/2018/039.pdf)] Faster AVX2 optimized NTT multiplication for Ring-LWE lattice cryptography
 
@@ -346,6 +353,8 @@ and $(r × s) · x = r · (s · x)$.
 * [[2022/198](https://eprint.iacr.org/2022/198.pdf)] Efficient FHEW Bootstrapping with Small Evaluation Keys, and Applications to Threshold Homomorphic Encryption
 * [[2022/915](https://eprint.iacr.org/2022/915.pdf)] OpenFHE: Open-Source Fully Homomorphic Encryption Library
 * [[2024/463](https://eprint.iacr.org/2024/463.pdf)] Security Guidelines for Implementing Homomorphic Encryption
+
+* [[2024/1881](https://eprint.iacr.org/2024/1881.pdf)] THOR: Secure Transformer Inference with Homomorphic Encryption
 * [[2024/2025](https://eprint.iacr.org/2024/2025.pdf)] Mira: Efficient Folding for Pairing-based Arguments
 * [[2025/263](https://eprint.iacr.org/2025/263.pdf)] Transparent SNARKs over Galois Rings
 * [[2025/882](https://eprint.iacr.org/2025/882.pdf)] Leveled Homomorphic Encryption over Composite Groups
@@ -1955,7 +1964,7 @@ c_1 = a \cdot r_0 + r_1
 where $\lfloor \cdot \rceil$ stands for taking the nearest binary integer.
 
 ---
-{Algorithm 1.1 R-LWE Key Exchange}
+{Algorithm 1.1 R-LWE Key Encapsulation}
 
 Выбор параметров:
 * For 128 bits of security, n = 512, q = 25601, and $\Phi (x)=x^{512}+1$
@@ -1968,6 +1977,43 @@ where $\lfloor \cdot \rceil$ stands for taking the nearest binary integer.
 
 Выбор параметров:
 * For 256 bits of security, n = 256, q = 3329
+
+Математическое определение. 
+
+
+1. Алиса генерирует матрицу $A \in \mathcal{R}_q^{k\times k}$ и выбирает случайные вектора $s, e \leftarrow \mathcal{X}^k$, чтобы сгенерировать открытый ключ (для зашифровывания) $ek = \{a, b\}$ и закрытый ключ (предназначеный для расшифровывания) $dk = \{s\}$:
+```math
+\begin{cases}
+{ek}_\mathsf{PKE} = (\langle \hat{A}, \hat{s}\rangle + \hat{e}, \hat{A})\\
+{dk}_\mathsf{PKE} = \hat{s}
+\end{cases}
+```
+2. Боб выбирает случайный вектор $y,e_1 \leftarrow \mathcal{X}^k$ и генерирует шифратекст $c = \{c_0, c_1\}$ используя окртытый ключ $ek_\mathsf{PKE}$ и шум:
+```math
+\begin{cases}
+c_1 = \langle \hat{A}^{\mathsf{T}}, \hat{y}\rangle + \hat{e}_1\\
+c_2 = \langle \hat{t}^{\mathsf{T}}, \hat{y}\rangle + \hat{e}_2 + \mu
+\end{cases}
+```
+где $(\hat{t} = \langle \hat{A}, \hat{s}\rangle + \hat{e},\hat{A})$ - значение открытого ключа, а $\mu$ - сообщение, которое он хочет отправить, представленное в виде битового шума. 
+
+3. Алиса расшифровывает шифратекст $c$ используя закрытый ключ $dk_\mathsf{PKE}$:
+```math
+m = \lfloor (c_2 - \langle \hat{s}^{\mathsf{T}}, c_1\rangle ) / t \rceil,
+```
+где $\lfloor \cdot \rceil$ обозначает ближайшее целое двоичное число.
+
+Следует обратить внимание, что элементами векторов и матриц являются полиномы с коэффициентами в $\mathbb{Z}_q^{N}$. Генерция ошибок $\mathcal{X}$ определяется, как источник случайных чисел с "гауссовым" центрированным биномиальным распределением, для которого применяется преобразование в $\mathbb{Z}_q^{N}$. Источник случайных чисел может быть реализован с использованием криптографической хэш функции в качестве PRF или XOF. Источник шума реализуется как каскад из операций $\mathsf{CBD}_\eta(\mathsf{PRF}(\sigma))$. Стандарт предлагает использовать функцию shake256 как PRF. И shake128 для генерации XOF коэффициентов матрицы $A$ в пространсвте точек NTT $\mathcal{T}_q$. Многообразие вариантов использования функций хеширования можно свести к единой функции пермутации, в режиме генерации XOF. Привязка может быть через использование XOF API и годится для генерации с исползованием SPONGE. Интересен вариант использования функции XOF на модульной арифметике в кольце $\mathcal{R}_q$.
+
+Операция скалярного произведение выполняется с использованием правил умножения полиномов, которое может быть выполнено с использованием прямого и обратного NTT преобразования. В математической записи шляпа - это признак того, что операции выполняются в пространстве точек NTT: $\mathcal{R}_q \mapsto \mathcal{T}_q$. 
+
+Используя правила умножения матриц, можно записать \
+$с_2 = \hat{s}^{\mathsf{T}}\circ\hat{A}^{\mathsf{T}}\circ\hat{y} + ...$. 
+Остальные слагаемые связанные с шумом и произведением шума на шум, должны оказаться меньше единицы благодаря нормальному (гауссову) закону распрделения, но это не точно. Остается ненулевая вероятность, что схема не сойдется, и на выходе мы получим ошибку. Для этого в схему проверки надо встраивать значение хеш для контроля целостности данных. 
+
+В этой схеме матрица $\hat{A} \in \mathcal{T}_q^{k \times k}$ синтезируется с использованием криптографической хэш функции из $\rho \in \mathbb{B}^{32}$ - вектора случайных чисел 32 байта, который передается в составе ключа зашифровывания $ek$. 
+
+В стандарте точки в пространстве NTT $\mathcal{T}_q$ представлены парами со своим правилом умножения сопряженных пар. Эту схему я воспринимаю в _комплексных_ числах. Операция скалярного произведения и транспонирования подразумевает сопряжение комплексных пар. 
 
 ## Algorithm 2: Oblivious Transfer Based on R-LWE
 
@@ -2749,6 +2795,8 @@ uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
 
 Схема расчета бабочек NTT CT butterfly размером 8 элементов представлена графчиески. Видно, что при понижении степени разложения $(m=2^s)$ меняется длина вектора и удваиается число бабочек в цикле. Для векторной реализации и реализации на GPU можно предложить масштабировать бабочки до достижения заданного размера N=16, после чего применять оптимизированный вариант расчета на регистрах AVX512. Фактически это разбивает алгоритм на две части, первая считает векторные бабочки, блоками по 16, а вторая считает NTT фиксированного размера (завершающие 4-е стадии разложения) на регистрах AVX512 или в варп-группе на GPU.
 
+Еще одно важное свойство - приодичность степени корней из единицы $2N$: $\psi^{-k} = - \psi^{N-k}$, может быть использовано при вычислении обратных степеней в алгоритме NTT GS butterfly. 
+
 * [[2024/585](https://eprint.iacr.org/2024/585.pdf)] A Complete Beginner Guide to the Number Theoretic Transform (NTT)
 
 -- Идея графического представления вычислительной сети из бабочек представлена в работе, но с некоторыми неточностями в знаках. В своей работе мы использовали графическое представление для отладки векторных бабочек. Нумерация индексов элементов на выходе алгоритма имеет обратный отраженный порядок бит (bit-reverse order). Нумерация индексов в таблице корней из единицы также дается в отраженном битовом порядке. Номер индекса в таблице (степеней корня) на стадии разложения $s$, $m=2^s$, высчитывается как $\mathrm{RevBits}_N(2^s+i)$.
@@ -2891,3 +2939,191 @@ const int L = Q+16;
  * HRotate  (||x||, k) ||ϕk(x)|| Rotation of the underlying message by k.
 ```
 -->
+
+{оптимизации}
+* [[2022/956](https://eprint.iacr.org/2022/956.pdf)] Improved Plantard Arithmetic for Lattice-based Cryptography
+* [[2309.00440](https://arxiv.org/pdf/2309.00440)] Yet another Improvement of Plantard Arithmetic for Faster Kyber on Low-end 32-bit IoT Devices
+
+## Residue Number System (RNS)
+
+{относится к оптимизациям и CKKS}
+
+Система остаточных классов (Residue Number System, RNS) является непозиционной системой целых чисел, основанной на китайской теореме об остатках (CRT). 
+В такой системе целое число $x$ представляется его остатками $x_i = x \mod m_i$ по базису взаимно простых чисел $\mathcal{B} = \{p_0, \ldots, p_{k-1}\}$ . 
+Множество $\mathcal{B} = \{p_0, \ldots, p_{k-1}\}$ формирует базис RNS, 
+состоящий из $k$ каналов. Модули $p_i$ обычно выбираются с учетом ширины слова $w$, 
+которая соответствует целевой архитектуре. 
+Важным преимуществом такой системы является то, что операции 
+сложения, вычитания и умножения могут выполняться параллельно в каждом канале:
+
+```math
+z_i = x_i \circ y_i \mod p_i, \text{ где } \circ \in \{+, -, \times\}
+```
+Традиционно рассматриваются системы $\{2^n+1, 2^n, 2^n-1\}$
+
+Ряд работ по использованию RNS в доказательствах ZKP и FHE:
+
+* [[2016/510](https://eprint.iacr.org/2016/510.pdf)] A Full RNS Variant of FV like Somewhat Homomorphic Encryption Schemes
+* [[2018/117](https://eprint.iacr.org/2018/117.pdf)] An Improved RNS Variant of the BFV Homomorphic Encryption Scheme
+* [[2018/931](https://eprint.iacr.org/2018/931.pdf)] A Full RNS Variant of Approximate Homomorphic Encryption
+
+
+**Обозначения**
+
+Для целого числа $q \geq 2$ мы отождествляем ниже кольцо  $\mathbb{Z}_q$ с его представлением в симметрическом интервале $\mathbb{Z} \cap [-q/2, q/2)$. Для произвольного действительного числа $x$ мы обозначаем через $[x]_q$ отображение $x$ на этот интервал, а именно, действительное число $x' \in [-n/2, n/2)$, такое что $x' - x$ делится на $q$. Мы также обозначаем через $\lfloor x \rfloor$, $\lceil x \rceil$ и $\lfloor x\rceil$ округление $x$ вниз, вверх и до ближайшего целого числа, соответственно. Векторы мы обозначаем жирным шрифтом, и расширяем нотации $\lfloor \mathbf{x} \rfloor$, $\lceil \mathbf{x} \rceil$, $\lfloor\mathbf{x}\rceil$ на векторы поэлементно.
+
+Мы выбираем множество из $k$ взаимно простых модулей $\{p_0, \dots, p_{k-1}\}$, где все числа целые больше 1, и пусть их произведение равно $P = \prod_{i=0}^{k-1} p_i$. 
+
+Для всех  $i \in \{0, \dots, k-1\}$ мы также обозначаем
+
+```math
+\hat{p}_i = P / p_i \in \mathbb{Z} \quad \text{и} \quad \tilde{p}_i = \hat{p}_i^{-1} \pmod{q_i} \in \mathbb{Z}_{q_i},
+```
+где $\tilde{p}_i \in [-p_i/2, p_i/2)$ и $\hat{p}_i \cdot \tilde{p}_i = 1 \pmod{p_i}$.
+
+
+**Теорема об остатках (CRT)**
+
+Обозначим представление целого числа $x \in \mathbb{Z}_p$ относительно базиса RNS $\{p_0, \dots, p_{k-1}\}$ через $x \sim (x_0, \dots, x_{k-1})$, где $x_i = [x]_{p_i} \in \mathbb{Z}_{p_i}$. Формула, выражающая $x$ через $x_i$, имеет вид
+```math
+x = \sum_{i=0}^{k-1} x_i \cdot \tilde{p}_i \cdot \hat{p}_i \pmod{P}~.
+```
+Эта формула может быть использована более чем одним способом для «реконструкции» значения $x \in \mathbb{Z}_p$ из $[x]_\mathcal{B}$. В данной работе мы используем следующие два факта:
+
+```math
+x = \sum_{i=0}^{k-1} [x_i \cdot \tilde{p}_i]_{p_i} \cdot \hat{p}_i - e \cdot P \quad \text{для некоторого } e \in \mathbb{Z},
+```
+и
+```math
+x = \sum_{i=0}^{k-1} x_i \cdot \tilde{p}_i \cdot \hat{p}_i  - e' \cdot P \quad \text{для некоторого } e' \in \mathbb{Z},
+```
+
+где сумма во второй формуле берётся по $x_i \cdot \tilde{q}_i \cdot \hat{q}_i \in \big[-\cfrac{q_i q}{4}, \cfrac{q_i q}{4}\big)$.
+
+**Представление RNS в кольце**
+
+Пусть $\mathcal{B} = \{p_0, \ldots, p_{k-1}\}$ — это базис взаимно простых чисел, и пусть $P = \prod_{i=0}^{k-1} p_i$. Обозначим через $[\cdot]_\mathcal{B}$ отображение из $\mathbb{Z}_P \mapsto \mathbb{Z}_{p_0} \times \mathbb{Z}_{p_1} \times \cdots \times \mathbb{Z}_{p_{k-1}}$, определённое как $a \mapsto [a]_\mathcal{B} = ([a]_{p_i})_{0 \leq i < k}$ -- отображение из множества целых чисел на множество остатков в базисе взаимно простых чисел. Это изоморфизм кольца по Теореме об остатках (CRT), и $[a]_\mathcal{B}$ называется представлением числа $a \in \mathbb{Z}_P$ в системе остаточных классов (RNS). Основное преимущество представления RNS заключается в возможности выполнения компонентных арифметических операций в малых кольцах $\mathbb{Z}_{p_i}$, что снижает асимптотическую и практическую вычислительную сложность. Этот изоморфизм кольца над целыми числами может быть естественным образом расширен до изоморфизма в кольце полиномов $[ \cdot ]_\mathcal{B} : \mathcal{R}_P \to \mathcal{R}_{p_0} \times \cdots \times \mathcal{R}_{p_{k-1}}$ путём пересчета коэффициентов над циклическими кольцами.
+
+
+**Расширение базиса CRT**
+
+Пусть $x \in \mathbb{Z}_P$ задано в представлении CRT $(x_0, \dots, x_{k-1})$, и предположим, что мы хотим расширить базис CRT, вычислив $[x]_q \in \mathbb{Z}_q$ для некоторого другого модуля $q > 1$. Используя уравнение (2), мы хотели бы вычислить 
+```math
+[x]_q = \left[ \left( \sum_{i=0}^{k-1} [x_i \cdot \tilde{p}_i]_{p_i} \cdot \hat{p}_i \right) - e \cdot P \right]_q~.
+```
+Основная сложность здесь заключается в вычислении $e$, которое является целым числом в  $\mathbb{Z}_k$. Формула для $e$ выглядит так:
+
+```math
+e = \left\lfloor \frac{\sum_{i=0}^{k-1} [x_i \cdot \tilde{p}_i]_{p_i} \cdot \hat{p}_i}{P} \right\rceil 
+= \left\lfloor \sum_{i=0}^{k-1} [x_i \cdot \tilde{p}_i]_{p_i} \cdot \frac{\hat{p}_i}{P} \right\rceil 
+= \left\lfloor \sum_{i=0}^{k-1} \frac{[x_i \cdot \tilde{p}_i]_{p_i}}{p_i} \right\rceil.
+```
+
+Чтобы получить $e$, мы вычисляем для каждого $i \in \{0, \dots, k-1\}$ элемент $y_i := [x_i \cdot \tilde{p}_i]_{p_i}$ используя арифметику целых чисел одинарной точности, а затем рациональное число $z_i := y_i / p_i$ в формате с плавающей точкой. Затем суммируем все $z_i$ и округляем результат, чтобы получить $e$. После того как мы получили значение $e$, а также все $y_i$, мы можем напрямую вычислить уравнение (2) по модулю $q$, чтобы получить 
+```math
+[x]_q = \left[ \left( \sum_{i=0}^{k-1} y_i \cdot [\hat{p}_i]_q \right) - e \cdot [P]_q \right]_q~.
+```
+Заметим, если все значения $[\hat{p}_i]_q$ и $[P]_q$ представить в качестве элементов вектора, то вычисление сводится к операции скалярного произведения векторов размерности $k+1$ по модулю $q$.
+
+{данное описание достаточно полное, чтобы представить алгоритм расширения}
+
+**Преобразования базиса CRT** 
+
+Прямое преобразование в RNS сводится к модульной операции на каждом базовом канале. Обратное преобразование может выполняться разными способами. Китайская теорема об остатках предоставляет вычислительную формулу в целевой системе чисел [[2018/117](https://eprint.iacr.org/2018/117.pdf)]:
+
+```math
+x + e\cdot P = \sum_{i=1}^n \left[x_i \cdot \hat{p}^{-1}_i\right]_{p_i} \cdot \hat{p}_i
+```
+
+где
+```math
+\hat{p}_i \times \left( \frac{P}{p_i} \right)^{-1}_{p_i} \equiv 1 \ \pmod{ P}
+```
+
+Пусть $\mathcal{D} = \{p_0, \ldots, p_{k-1}, q_0, \ldots, q_{\ell-1}\}$ некоторый базис. Пусть $\mathcal{B} = \{p_0, \ldots, p_{k-1}\}$ и $\mathcal{C} = \{q_0, \ldots, q_{\ell-1}\}$ будут его подпространствами. Обозначим их произведения через $P = \prod_{i=0}^{k-1} p_i$ и $Q = \prod_{j=0}^{\ell-1} q_j$ соответственно. Тогда можно преобразовать RNS-представление $[a]_\mathcal{C} = (a^{(0)}, \ldots, a^{(\ell-1)}) \in \mathbb{Z}_{q_0} \times \cdots \times \mathbb{Z}_{q_{\ell-1}}$ целого числа $a \in \mathbb{Z}_Q$ в элемент $\mathbb{Z}_{p_0} \times \cdots \times \mathbb{Z}_{p_{k-1}}$ путём вычисления
+
+```math
+\text{Conv}_{\mathcal{C} \to \mathcal{B}}([a]_\mathcal{C}) = \left( \sum_{j=0}^{\ell-1} [a^{(j)} \cdot \hat{q}_j^{-1}]_{q_j} \cdot \hat{q}_j \pmod{p_i} \right)_{0 \leq i < k},
+```
+
+где $\hat{q}_j = \prod\limits_{i \neq j} q_{i} \in \mathbb{Z}$. Обратите внимание, что 
+$\sum\limits_{j=0}^{\ell-1} \left[a^{(j)} \cdot \hat{q}_j^{-1}\right]_{q_j} \cdot \hat{q}_j = a + Q \cdot e$\
+для некоторого малого $e \in \mathbb{Z}$, удовлетворяющего $|a + Q \cdot e| \leq (\ell/2) \cdot Q$. Это подразумевает, что $\text{Conv}_{C \to B}([a]_C) = [a + Q \cdot e]_B$ может рассматриваться как RNS-представление целого числа $a + Q \cdot e$ относительно базиса $\mathcal{B}$.
+
+* [[2018/931](https://eprint.iacr.org/2018/931.pdf)]
+-- определяет две операции: увеличение и уменьшение размерности базиса, а также изменение базиса на основе этих двух операций. 
+
+**Mixed Radix Conversion**
+
+RNS позволяет параллельно считать в числах с пониженной разрядностью. Но обратные операции связанные с вычислением знака, делением и сравеннием выполняются с использованием обратного преобразования в позиционную систему. Сравнение можно выполнить в позиционной системе Mixed Radix.
+
+**Алгоритм Гарнера**
+Рассмотрим набор модулей 
+$(p_{0},p_{1},\dots ,p_{k-1})$, удовлетворяющих условию теоремы. Другой теоремой из теории чисел утверждается, что любое число 
+$0\leqslant x<M=p_{0}\cdot p_{1}\cdot \ldots \cdot p_{k-1}$ однозначно представимо в виде
+$x=x_{0}+x_{1}\cdot p_{0}+x_{2}\cdot p_{0}\cdot p_{1}+\dots +x_{k-1}\cdot p_{0}\cdot p_{1}\cdot \ldots \cdot p_{k-1}$.
+
+Вычислив по порядку все коэффициенты $x_{i}$ для $i\in \{0,1,\dots ,k-1\}$ мы сможем подставить их в формулу и найти искомое решение:
+
+Обозначим через $r_{ij}=p_{i}^{-1}{\mod {p_{j}}}$ и рассмотрим выражение для $x$ по модулю $p_{i}$ получим:
+```math
+\begin{aligned}
+x_{0}&=r_{0}\\
+r_{1}&=(x_{0}+x_{1}p_{0}){\pmod {p_{1}}}\\
+x_{1}&=(r_{1}-x_{0}) r_{01}{\pmod {p_{1}}}\\
+r_{2}&=(x_{0}+x_{1}p_{0}+x_{2}p_{0}p_{1}){\pmod{p_{2}}}\\
+x_{2}&=((r_{2}-x_{0})r_{02}-x_{1})r_{12}{\pmod{p_{2}}}
+\end{aligned}
+```
+и так далее.
+
+* [26] Harvey L. Garner. 1959. The residue number system. In Papers Presented at
+the the March 3-5, 1959, Western Joint Computer Conference (IRE-AIEE-ACM ’59
+(Western)). Association for Computing Machinery, New York, NY, USA, 146–153.
+https://doi.org/10.1145/1457838.1457864
+
+### Algorithm. Mixed Radix Conversion
+
+*Requie:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ - набор из $n$ взаимно простых модулей.\
+*Requie:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
+Шаг 1  precompute $\gamma_k=(\prod_{i=0}^{k-1} p_i)^{-1}{\mod {p_{k}}}~$, for $k=1,2, ... , n-1$
+1. $\text{for } k \text{ from } 1 \text{ to } n-1$
+2. $\quad p ← p_0 \pmod{p_k}$
+3. $\quad \text{for } i \text{ from } 1 \text{ to } k-1$
+4. $\quad\quad p ← p\cdot p_i \pmod{p_k}$
+5. $\quad \gamma_k = p^{-1} \pmod{p_k}$
+
+Шаг 2: Расчет коэффициентов MRC $\{v_i\}$ из RNS $\{a_i\}$
+1. $v_0 ← a_0$
+2. $\text{for } k \text{ from } 1 \text{ to } n-1$
+3. $\quad t ← v_{k-1}$
+4. $\quad \text{for } i \text{ from } k-2 \text{ to } 0$
+5. $\quad\quad t ← t\cdot p_i + v_i\pmod{p_k}$
+6. $\quad v_k = (a_k - t)\gamma_k \pmod{p_k}$
+
+Шаг 3: Расчет стандартного представления числа из MRC
+1. $x ← v_{n-1}$
+2. $\text{for } k \text{ from } n-2 \text{ to } 0$
+3. $\quad x = x\cdot p_k + v_k$
+4. $\text{return }x$
+
+---
+{перенести к KEM} 
+
+* (https://pq-crystals.org/dilithium/data/dilithium-specification-round3.pdf)
+
+Модуль $q$ выбирается так, чтобы существовал $N$-й корень из единицы $\zeta$ по модулю $q$. Это означает, что циклический полином $X^N + 1$ раскладывается на линейные множители $X - \zeta^i$ по модулю $q$ при $i = 1, 3, 5, \ldots, N-1$. По теореме об остатках циклическое кольцо $\mathcal{R}_q$ изоморфно произведению колец $\mathbb{Z}_q[X]/(X - \zeta^i) \cong \mathbb{Z}_q$. В этом произведении колец умножение элементов происходит поэлементно. Изоморфизм
+
+```math
+a \mapsto (a(\zeta), a(\zeta^3), \ldots, a(\zeta^{N-1})) : \mathcal{R}_q \to \prod_i \mathbb{Z}_q[X]/(X - \zeta^i)
+```
+
+может быть вычислен с помощью аналога Быстрого преобразования Фурье (NTT). 
+
+Поскольку $X^{N} + 1 = X^{N} - \zeta^{N} = (X^{N/2} - \zeta^{N/2})(X^{N/2} + \zeta^{N/2})$, можно сначала вычислить отображение
+
+```math
+\mathbb{Z}_q[X]/(X^{N} + 1) \to \mathbb{Z}_q[X]/(X^{N/2} - \zeta^{N/2}) \times \mathbb{Z}_q[X]/(X^{N/2} + \zeta^{N/2})
+```
+
+и затем продолжить отдельно с двумя приведёнными полиномами степени менее $N/2$, заметив, что $\zeta^k = -\zeta^{N+k}$. 
