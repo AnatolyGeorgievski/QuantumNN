@@ -75,6 +75,7 @@ https://eprint.iacr.org/2012/470.pdf
     Ur = 2^{32}+INVL(q);
  */
 static inline uint64_t INVL(uint32_t v) {
+    int n = 0;//__builtin_clz(v);
     return ((unsigned __int64)(-v)<<32)/v;
 }
 
@@ -88,12 +89,17 @@ static inline __m512i _mod1(__m512i x, __m512i q){
 
 static inline __m512i _addm(__m512i a, __m512i b, __m512i q){
     __m512i d = _mm512_add_epi32(a, b);
+// если переполнение
+    d = _mm512_mask_sub_epi32(d, _mm512_cmplt_epu32_mask(d,b), d, q);
+    //return d;
     __m512i t = _mm512_sub_epi32(d, q);
     return _mm512_min_epu32(d, t);
 //    return _mod1(_mm512_add_epi32(a, b), q);
 }
 static inline __m512i _subm(__m512i a, __m512i b, __m512i q){
     __m512i d = _mm512_sub_epi32(a, b);
+    d = _mm512_mask_add_epi32(d, _mm512_cmplt_epu32_mask(a,b), d, q);
+    return d;
     __m512i t = _mm512_add_epi32(d, q);
     return _mm512_min_epu32(d, t);
 }
@@ -131,6 +137,12 @@ static inline __m512i _barret(__m512i d, __m512i q, __m512i u){
     c4 = _mm512_sub_epi64 (d, _mm512_mul_epu32(c3, q));
     return _mm512_min_epu64(c4, _mm512_sub_epi64(c4, q));
 }
+static inline __m512i _shoup(__m512i a, __m512i  b, __m512i w, __m512i q){
+    __m512i r,p;
+    p = _mm512_srli_epi64(_mm512_mul_epu32(a, w),32);
+    r = _mm512_sub_epi64(_mm512_mul_epu32(a, b), _mm512_mul_epu32(q, p));
+    return _mm512_min_epu64(r, _mm512_sub_epi64(r, q));
+}
 /*! \brief Signed Montgomery reduction 
     \see (https://arxiv.org/pdf/2306.01989)
 */
@@ -138,7 +150,7 @@ static inline __m512i _montgomery(__m512i d, __m512i q, __m512i qm) {
     __m512i m = _mm512_mul_epi32(d, qm);
     __m512i t = _mm512_mul_epi32(m, q);
     __m512i r = _mm512_sub_epi64(d, t);
-    return r;// _mm256_srai_epi64(r, 32);
+    return _mm512_srli_epi64(r, 32);
 }
 #define Q 32
 
@@ -160,6 +172,12 @@ static inline __m512i _mulm(__m512i a, __m512i b, __m512i q, __m512i u){
 //    return _mm512_mask_shuffle_epi32(d0, (__mmask16)0xaaaau, d1, 0x80); 
 //    return _mm512_unpacklo_epi32(d0, d1);
 }
+static inline __m512i _mulm_shoup(__m512i a, __m512i b, __m512i w, __m512i q){
+    __m512i d0 =  _shoup(a, b, w, q);
+    __m512i d1 =  _shoup(_mm512_srli_epi64(a,32), b, w, q);
+    return _mm512_mask_blend_epi32((__mmask16)0xaaaau, d0, _mm512_slli_epi64(d1,32));
+}
+
 static inline __m512i _maddm(__m512i a, __m512i b, __m512i c, __m512i q, __m512i u){
     __m512i d0 = _mm512_mul_epu32(a, b);
     d0 = _mm512_add_epi64(d0, _mm512_maskz_mov_epi32(0x5555, c));
@@ -195,7 +213,7 @@ static inline __m512i _sqrm(__m512i a, __m512i q, __m512i u){
  */
 static inline 
 void poly_mulm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
-    const uint32_t Ur = INVL(p);
+    const uint64_t Ur = INVL(p);
     __m512i q = _mm512_set1_epi32(p);
     __m512i q_= _mm512_set1_epi64(p);
     __m512i u = _mm512_set1_epi64(Ur);
@@ -207,8 +225,8 @@ void poly_mulm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned 
     }
 }
 static inline 
-void poly_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int N, const uint32_t p) {
-    const uint32_t Ur = INVL(p);
+void poly_mulm_u_(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int N, const uint32_t p) {
+    const uint64_t Ur = INVL(p);
     __m512i q  = _mm512_set1_epi32(p);
     __m512i q_ = _mm512_set1_epi64(p);
     __m512i u  = _mm512_set1_epi64(Ur);
@@ -219,6 +237,20 @@ void poly_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int 
         _mm512_storeu_epi32(r + i, vr);
     }
 }
+static inline 
+void poly_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int N, const uint32_t p) {
+    const uint64_t w = ((uint64_t)b<<32)/p;
+    __m512i q_ = _mm512_set1_epi64(p);
+    __m512i vw = _mm512_set1_epi64(w);
+    __m512i vb = _mm512_set1_epi32(b);
+    for (int i = 0; i < N; i += 16) {
+        __m512i va = _mm512_loadu_epi32((const void *)(a + i));
+        __m512i vr = _mulm_shoup(va, vb, vw, q_);// алгоритм умножения по модулю работает с числами 64 бита.
+        _mm512_storeu_epi32(r + i, vr);
+    }
+}
+
+
 /*! \brief Element-wise polynomial addition modulo q.
     \param r Output polynomial (array of N coefficients).
     \param a First  polynomial
@@ -235,6 +267,15 @@ void poly_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned
         __m512i va = _mm512_loadu_epi32((const void *)(a + i));
         __m512i vb = _mm512_loadu_epi32((const void *)(b + i));
         __m512i vr = _addm(va, vb, q);
+        _mm512_storeu_epi32(r + i, vr);
+    }
+}
+static inline 
+void poly_mod1(uint32_t *r, const unsigned int N, const uint32_t p) {
+    __m512i q = _mm512_set1_epi32(p);
+    for (int i = 0; i < N; i += 16) {
+        __m512i v = _mm512_loadu_epi32((const void *)(r + i));
+        __m512i vr = _mod1(v, q);
         _mm512_storeu_epi32(r + i, vr);
     }
 }
@@ -382,7 +423,7 @@ static inline __m256i _mulm_avx2(__m256i a, __m256i b, __m256i q, __m256i u){
     \note Processes 8 coefficients at a time using AVX2, for polynomials in R_q = Z_q[x]/(x^{256} + 1).
  */
 static inline void poly_mulm(uint32_t *result, const uint32_t *a, const uint32_t *b, unsigned int N, uint32_t p) {
-    uint32_t Ur = INVL(p);
+    uint64_t Ur = INVL(p);
     __m256i q = _mm256_set1_epi32(p);
     __m256i q_= _mm256_set1_epi64x(p);
     __m256i u = _mm256_set1_epi64x(Ur);
@@ -394,7 +435,7 @@ static inline void poly_mulm(uint32_t *result, const uint32_t *a, const uint32_t
     }
 }
 static inline void poly_mulm_u(uint32_t *result, const uint32_t *a, const uint32_t b, unsigned int N, uint32_t p) {
-    uint32_t Ur = INVL(p);
+    uint64_t Ur = INVL(p);
     __m256i q = _mm256_set1_epi32(p);
     __m256i q_= _mm256_set1_epi64x(p);
     __m256i u = _mm256_set1_epi64x(Ur);
@@ -430,7 +471,7 @@ static inline void poly_xtime_addm(uint32_t *r, const uint32_t *a, const uint32_
  */
 static inline 
 void poly_xtime_madd(uint32_t *r, const uint32_t *a, const uint32_t b, unsigned int N, uint32_t p) {
-    uint32_t Ur = INVL(p);
+    uint64_t Ur = INVL(p);
     __m256i q = _mm256_set1_epi32 (p);
     __m256i q_= _mm256_set1_epi64x(p);
     __m256i u = _mm256_set1_epi64x(Ur);
@@ -506,10 +547,15 @@ static inline uint32_t SRM(uint32_t a, uint32_t q) {
     return (a&1)? (a+(unsigned __int64)q)>>1: (a>>1);
 }
 /*! Редуцирование по модулю простого числа, с использованием Барретта */
-static inline uint32_t MODB(uint64_t a, uint32_t q, uint32_t U) {
+static inline uint32_t MODB(uint64_t a, uint32_t q, uint64_t U) {
     uint64_t c2 = a + U*(a >>32);
     uint64_t c4 = a - q*(c2>>32);
-    return  (c4>= q)? c4 - q: c4;
+    return  ((uint64_t)(c4-q)<c4)? c4 - q: c4;
+}
+static inline uint32_t MODB1(uint64_t a, uint32_t q, uint64_t U, int n) {
+    uint64_t c2 = a + U*(a >>(32-n));
+    uint64_t c4 = a - q*(c2>>32);
+    return  ((uint64_t)(c4-q)<c4)? c4 - q: c4;
 }
 /*! \brief Возведение в степень по модулю $b^a (\mod q)$ */
 static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
@@ -540,8 +586,11 @@ uint32_t soup_MULM(uint32_t a, uint64_t b, uint32_t p){
 uint32_t shoup_MULM(uint32_t a, uint32_t b, uint64_t w,  uint32_t p){
 //    uint64_t w = (double)(b<<32)/p;
     uint64_t q = (a*(uint64_t)w)>>32;
-    uint64_t r = a*(uint64_t)b - q*p;
-    return  (r-p< r)? r - p: r;// min(r, r-p)
+//    uint32_t r0 = a*(uint64_t)b;
+//    int32_t r1 = q*p;
+//    uint32_t r = r0 - r1;
+    uint64_t r = a*(uint64_t)b - q*(uint32_t)p;
+    return  ((uint64_t)(r-p)< r)? r - p: r;// min(r, r-p)
 }
 uint32_t soup2_MULM(uint32_t a, uint64_t b, uint32_t p){
     uint64_t w = b;
@@ -557,7 +606,7 @@ uint32_t soup2_MULM(uint32_t a, uint64_t b, uint32_t p){
 
     uint64_t q = (((a*w)>>32) + a)>>(l-32);
     uint64_t r = a*b - q*p;
-    return  (r-p < r)? r - p: r;
+    return  ((uint64_t)(r-p) < r)? r - p: r;
 }
 /*! \brief Редукция Монтгомери 
     Работает на z<p, q<2^{31}
@@ -695,13 +744,14 @@ uint32_t* NTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q){
             NTT_CT_butterfly(a+k, a+k+n, w, n, q);
         }
     }
-    // можно оптимизировать
+    // можно оптимизировать см ml_kem.c
     for (; m < N; m = 2*m, n = n/2) {
         for (i=0, k=0; i<m; i++, k+=2*n) {
             uint32_t w = gamma[m+i];
             NTT_CT_butterfly(a+k, a+k+n, w, n, q);
         }
     }
+    poly_mod1(a, N, q);
     return a;
 }
 /*! \brief Gentleman-Sande (GS) Radix-2 InvNTT 
@@ -716,12 +766,13 @@ uint32_t* invNTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q)
     n = 1;
     for (m = N/2; m > 0; m = m/2, n=n*2) {
         for (i=0, k=0; i<m; i++, k+=2*n) {
-            uint32_t w = gamma[m+i];
+            uint32_t w = q-gamma[m+i];
             NTT_GS_butterfly(a+k, a+k+n, w, n, q);
         }
     }
     uint32_t N_inv = INVM(N, q);
-    vec_mulm_u(a, a, N_inv, N, q);
+    poly_mulm_u(a, a, N_inv, N, q);
+    poly_mod1(a, N, q);
     return a;
 }
 /*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
@@ -852,10 +903,16 @@ void vec_mulm_u_(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigne
         r[i] = MULM(a[i], b, q);
 }
 void vec_mulm_u(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q){
-    uint64_t w = (double)((uint64_t)b<<32)/q;
+    uint32_t w = ((uint64_t)b<<32)/q;
     for (int i=0; i<N; i++)
         r[i] = shoup_MULM(a[i], b, w, q);
 }
+void vec_mulm_b(uint32_t *r, const uint32_t *a, const uint32_t b, const unsigned int N, const uint32_t q){
+    uint64_t Ur = INVL(q);
+    for (int i=0; i<N; i++)
+        r[i] = MODB(a[i]*(uint64_t)b, q, Ur);
+}
+
 void vec_addm(uint32_t *r, const uint32_t *a, const uint32_t *b, const unsigned int N, const uint32_t q){
     for (int i=0; i<N; i++)
         r[i] = ADDM(a[i], b[i], q);
@@ -876,7 +933,7 @@ void vec_xtime_madd(uint32_t *r, const uint32_t *a, uint32_t b, const unsigned i
 void vec_xtime_madd_shoup(uint32_t *r, const uint32_t *a, uint32_t b, const unsigned int N, const uint32_t q){
     uint32_t c = q-r[N-1];
     uint32_t t;
-    uint64_t w = (double)((uint64_t)b<<32)/q;
+    uint64_t w = ldexp(b, 32)/q;//(double)((uint64_t)b<<32)/q;
     for (int i=0; i<N; i++){
         t = r[i];
         r[i] = ADDM(shoup_MULM(a[i], b, w, q), c, q);
@@ -916,26 +973,41 @@ void poly_mul(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned int N,
 {
     uint32_t v[N];
     poly_mulm_u(r, a, b[N-1], N, q);
+    poly_mod1(r, N, q);
     for (int i = N-2; i>=0; i--){
-        poly_xtime_madd(r, a, b[i], N, q);
+        //poly_xtime_madd(r, a, b[i], N, q);
         //vec_xtime_madd_shoup(r, a, b[i], N, q);
-        //poly_mulm_u(v, a, b[i], N, q);
-        //vec_xtime_addm(r, v, N, q);
+        poly_mulm_u(v, a, b[i], N, q);
+        vec_xtime_addm(r, v, N, q);
     }
+    poly_mod1(r, N, q);
 }
 static
 void NTT_CT_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q) {
     uint32_t w[n];
-    vec_mulm_u(w, b, g, n, q);
-    vec_subm(b, a, w, n, q);
-    vec_addm(a, a, w, n, q);
+    if (n<VL) {
+        vec_mulm_u(w, b, g, n, q);
+        vec_subm(b, a, w, n, q);
+        vec_addm(a, a, w, n, q);
+    } else {
+        poly_mulm_u(w, b, g, n, q);
+        poly_subm(b, a, w, n, q);
+        poly_addm(a, a, w, n, q);
+    }
 }
 static 
 void NTT_GS_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q) {
     uint32_t w[n];
-    vec_subm(w, a, b, n, q);
-    vec_addm(a, a, b, n, q);
-    vec_mulm_u(b, w, g, n, q);
+    if (n<VL) {
+        vec_subm(w, b, a, n, q);
+        vec_addm(a, a, b, n, q);
+        vec_mulm_u(b, w, g, n, q);
+    } else {
+        poly_subm(w, b, a, n, q);
+        poly_addm(a, a, b, n, q);
+        poly_mod1(a, n, q);
+        poly_mulm_u(b, w, g, n, q);
+    }
 }
 /*! \brief Умножение полинома на полином-константу с использованием NTT
 
@@ -1285,6 +1357,8 @@ uint32_t primes[] = {
     (1u<<31) -(1u<<19)+1,
     (1u<<31) -(1u<<17)+1,
 
+    //0x101, 0x301, 0xd01, 0x1f01, 0x2501, 0x2e01, 0x3001, 0x3401, 0x4c01, 25601,
+
     0x7fe7f001, 0x7fe01001, 0x7fd35001, 0x7fc5d001, 
 
     0xffffd001, 0xfffbb001, 0xfff16001, 0xffddb001, 
@@ -1327,7 +1401,14 @@ uint32_t primes[] = {
     (0xFF93u<<16)+1,
     (0xFF82u<<16)+1,
     (0xFF7Bu<<16)+1,
-
+    // A - prime, proth test
+    0xffac0001, 0xff2b0001, 0xff0d0001, 0xfee00001, 0xfec20001, 0xfeb60001, 0xfe980001, 0xfda80001, 
+    0xfd9f0001, 0xfd720001, 0xfcd60001, 0xfbe30001, 0xfbaa0001, 0xfb3e0001, 0xfb1a0001, 0xfafc0001, 
+    0xfaab0001, 0xfa7e0001, 0xf9a30001, 0xf99d0001, 0xf8d10001, 0xf88c0001, 0xf8710001, 0xf8320001, 
+    0xf7cc0001, 0xf79f0001, 0xf72d0001, 0xf6ac0001, 0xf6280001, 0xf5fb0001, 0xf5da0001, 0xf53e0001, 
+    0xf4750001, 0xf4480001, 0xf4300001, 0xf3ee0001, 0xf39a0001, 0xf3730001, 0xf35e0001, 0xf3220001, 
+    0xf2e60001, 0xf2bf0001, 0xf2140001, 0xf1ed0001, 0xf1e70001, 0xf1780001, 0xf1150001, 0xf0670001, 
+    0xf0340001, 0xf02b0001,
 //    (0xFFF0u<<16)+1,// 2^32 - 2^20 +1
     (0xC000u<<16)+1,// 2^32 - 2^30 +1
 
@@ -1394,7 +1475,7 @@ prime=fdffffff A=fe00 gen= 3 ord 7efffffe
     3. Выбор простых чисел для операции MWC32 и MWC32s (модульная арифметика со знаком)
  */
 int main(int argc, char **argv){
-    const uint32_t U0 = INVL(Q0);
+    const uint64_t U0 = INVL(Q0);
 #if __AVX512F__
     __m512i E = _mm512_set1_epi32(1);
     __m512i Z = _mm512_set1_epi32(0);
@@ -1541,7 +1622,7 @@ int main(int argc, char **argv){
         printf("Signed Montogery test\n");
         for (int k = 1; k< sizeof(primes)/sizeof(primes[0]); k++) {
             int32_t p = primes[k];
-            if ((p>>31)!=0) continue;
+            //if ((p>>31)!=0) continue;
             int32_t pi = mod_inverse(p);
             printf ("p=%08x pi = %08x %08x \n",p, pi, p*(-pi));
             for (int32_t a =p; a>0; a--)
@@ -1561,23 +1642,48 @@ int main(int argc, char **argv){
         return 0;
 
     }
-    if (0) {// soup test
-        printf("Soup modular reduction\n");
-        for (int k = 13; k< sizeof(primes)/sizeof(primes[0]); k++) {
+    if (0) {// shoup test
+        printf("Shoup modular reduction\n");
+        for (int k = 6; k< sizeof(primes)/sizeof(primes[0]); k++) {
             uint32_t p = primes[k];
-            for (uint32_t a =p+0xFFFF; a>0; a--){
+            for (uint64_t a =p; a>0; a--){
                 uint32_t b = ((uint64_t)a+3)%p;
                 //uint32_t c = soup2_MULM(a, b, p);
-                uint32_t c = soup_MULM(a, b, p);
+                //uint32_t c = soup2_MULM(a, b, p);
+                uint32_t w = (uint64_t)(((uint64_t)b<<32))/p;//ldexp(b,32)/p;//
+                uint32_t c = shoup_MULM(a, b, w, p);
                 uint32_t d = ((uint64_t)a*b)%p;
                 if (c != d) {
                     printf("fail %08x * %08x = %08x != %08x\n", a, b, c, d);
+                    break;
                     //_Exit(1);
                 }
             }
-            printf("Prime %08x, soup test done\n", p);
+            printf("Prime %08x, shoup test done\n", p);
         }
-
+        return 0;
+    }
+    if (0) {// Barrett test
+        printf("Barrett modular reduction\n");
+        for (int k = 0; k< sizeof(primes)/sizeof(primes[0]); k++) {
+            uint32_t p = primes[k];
+            int n = __builtin_clz(p);
+            //uint64_t Ur =(((1uLL<<(32))-p)<<32)/p;//INVL(p);
+            uint64_t Ur =(((1uLL<<(32))-p)<<(32-n))/(p-1);//INVL(p);
+            if (n) Ur =(((1uLL<<(32))-p)<<(32-n))/p;//INVL(p);
+            for (uint64_t a =p; a>0; a--){
+                uint32_t b = ((uint64_t)a+3)%p;
+                uint32_t c = MODB1(a*b, p, Ur,n);
+                uint32_t d = ((uint64_t)a*b)%p;
+                if (c != d) {
+                    printf("fail %08x * %08x = %08x != %08x\n", a, b, c, d);
+                    break;
+                    //_Exit(1);
+                }
+            }
+            printf("Prime %08x, barret test done\n", p);
+        }
+        return 0;
     }
     if (1) {// NTT reference implementation
         printf("NTT test\n");
@@ -1677,8 +1783,16 @@ int main(int argc, char **argv){
             uint32_t g_= INVM(g, p);// g^{-1}
             ntt_precompute_rev(wv, g, n, p);// расчет вектора степеней корня степени N в bit-reversed order для применения в NTT
             ntt_precompute_rev(vv, g_, n, p);
-            ntt_precompute_rev(wu, SQRM(g,p), n, p);
-            ntt_precompute_rev(vu, SQRM(g_,p), n, p);
+            //ntt_precompute_rev(wu, SQRM(g,p), n, p);
+            //ntt_precompute_rev(vu, SQRM(g_,p), n, p);
+            if (0){
+                uint32_t n_inv = INVM(n,p);
+                printf("prime %08x:\n", p);
+                for (int i=0; i<n/2;i++) {
+                    printf ("%08x,%08x, ", wv[i], (uint64_t)wv[RevBits_N(n/2+i,n)]*(wv[RevBits_N(n-1-i,n)])%p);
+                    if (i%4==3) printf("\n");
+                }
+            }
             printf("prime=%08x g=%8x ",p, g);
             poly_mul(c, a, b, n, p); 
 //            poly_gamma(a, g, n, p);

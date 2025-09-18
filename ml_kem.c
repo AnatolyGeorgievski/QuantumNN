@@ -52,6 +52,7 @@ API:
 
 тестирование:
 $ gcc -DTEST_NTT -march=native -O3 -o test ml_kem.c shake256.c
+$ echo "" | gcc -dM -E - -march=native 
 
 Ряд простых чисел $q=a 2^s +1$, где a-простое число, для которых работает:
 Shoup q=  257 (0x0101) a=  1 s= 8 w=(b*0xff00ff01uLL)>>24 zeta=3
@@ -121,6 +122,7 @@ extern void XOF_squeeze(XOF_ctx_t* ctx, uint8_t* data, size_t len);
 typedef uint16_t uint16x2_t __attribute__((vector_size(4)));
 typedef  int16_t  int16x2_t __attribute__((vector_size(4)));
 
+typedef uint16_t uint16x8_t  __attribute__((vector_size(16)));
 typedef uint16_t uint16x16_t __attribute__((vector_size(32)));
 typedef uint16_t uint16x32_t __attribute__((vector_size(64)));
 
@@ -135,8 +137,8 @@ uint32_t shoup_div(uint32_t b){
 #if Q_PRIME == 3329
 //    return (((b*0xBB41uL)>>16) + b*0x9D7DuL)>>(43-32);
     return (b*0x9D7DBB41uLL)>>27;
-    b<<=4;
-    return ((b*0x3AFB7681uLL)>>32) + b;
+//    b<<=4;
+//    return ((b*0x3AFB7681uLL)>>32) + b;
 #elif Q_PRIME == 12289
     return (b*0xAAA71C85uLL)>>(45-16);
 #else
@@ -163,8 +165,11 @@ static inline uint16x2_t MULM(uint16x2_t a, uint16x2_t b){
     return r;
 }
 #include <x86intrin.h>
-#if 0//def __AVX512F__
+#if defined(__AVX512F__)
 #define VL 32 // vector length, epi16 elements per vector register
+static inline uint16x32_t VMOD1(uint16x32_t r, uint16x32_t p){
+    return (uint16x32_t)_mm512_min_epu16((__m512i)r, _mm512_sub_epi16((__m512i)r, (__m512i)p));
+}
 static inline uint16x32_t VADDM(uint16x32_t a, uint16x32_t b, uint16x32_t p){
     __m512i r = _mm512_add_epi16((__m512i)a, (__m512i)b);
     return (uint16x32_t)_mm512_min_epu16(r, _mm512_sub_epi16(r, (__m512i)p));
@@ -178,9 +183,10 @@ static inline uint16x32_t VMULM(uint16x32_t a, uint16x32_t b, uint16x32_t w, uin
     __m512i q = _mm512_mulhi_epu16((__m512i)a, (__m512i)w);
     __m512i r0= _mm512_mullo_epi16((__m512i)a, (__m512i)b);
     __m512i r1= _mm512_mullo_epi16(q, (__m512i)p);
-    r0 = _mm512_sub_epi16(r0, r1);
-    r1 = _mm512_sub_epi16(r0, (__m512i)p);
-    return (uint16x32_t)_mm512_min_epu16(r0, r1);
+    __m512i r = _mm512_sub_epi16(r0, r1);
+// эта операция не требуется? 
+    r = _mm512_min_epu16(r, _mm512_sub_epi16(r, (__m512i)p));
+    return (uint16x32_t)r;
 }
 static inline uint16x32_t VMULM_barrett(uint16x32_t a, uint16x32_t b, uint16x32_t u, uint16x32_t q){
     __m512i z1 = _mm512_mulhi_epu16((__m512i)a, (__m512i)b);
@@ -216,7 +222,7 @@ static inline uint16x16_t VMULM(uint16x16_t a, uint16x16_t b, uint16x16_t w, uin
     __m256i r1= _mm256_mullo_epi16(q, (__m256i)p);
     __m256i r = _mm256_sub_epi16(r0, r1);
 // эта операция не требуется? 
-//    __m256i r = _mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)p));
+    r = _mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)p));
     return (uint16x16_t)r;
 }
 /*! \brief Barrett reduction
@@ -240,18 +246,44 @@ static inline uint16x16_t VMULM_barrett(uint16x16_t a, uint16x16_t b, uint16x16_
     __m256i r  = _mm256_sub_epi16(z0, c4);
     return (uint16x16_t)_mm256_min_epu16(r, _mm256_sub_epi16(r, (__m256i)q));
 }
+#elif defined(__AVX__) && defined(__SSE4_1__) && defined(__SSE2__)
+#define VL 8
+static inline uint16x8_t VMOD1(uint16x8_t r, uint16x8_t p){
+    return (uint16x8_t)_mm_min_epu16((__m128i)r, _mm_sub_epi16((__m128i)r, (__m128i)p));
+}
+static inline uint16x8_t VADDM(uint16x8_t a, uint16x8_t b, uint16x8_t p){
+    __m128i r = _mm_add_epi16((__m128i)a, (__m128i)b);
+    return (uint16x8_t)_mm_min_epu16(r, _mm_sub_epi16(r, (__m128i)p));
+}
+static inline uint16x8_t VSUBM(uint16x8_t a, uint16x8_t b, uint16x8_t p){
+    __m128i r = _mm_sub_epi16((__m128i)a, (__m128i)b);
+    return (uint16x8_t)_mm_min_epu16(r, _mm_add_epi16(r, (__m128i)p));
+}
+/*! Shoup's multiplication with precomputed w = (b<<16)/Q_PRIME for faster computation */
+static inline uint16x8_t VMULM(uint16x8_t a, uint16x8_t b, uint16x8_t w, uint16x8_t p){
+    __m128i q = _mm_mulhi_epu16((__m128i)a, (__m128i)w);
+    __m128i r0= _mm_mullo_epi16((__m128i)a, (__m128i)b);
+    __m128i r1= _mm_mullo_epi16(q, (__m128i)p);
+    __m128i r = _mm_sub_epi16(r0, r1);
+    return (uint16x8_t)_mm_min_epu16(r, _mm_sub_epi16(r, (__m128i)p));
+}
+static inline uint16x8_t VMULM_barrett(uint16x8_t a, uint16x8_t b, uint16x8_t u, uint16x8_t q){
+    __m128i z1 = _mm_mulhi_epu16((__m128i)a, (__m128i)b);
+    __m128i z0 = _mm_mullo_epi16((__m128i)a, (__m128i)b);
+    __m128i c1 = _mm_or_si128(_mm_srli_epi16(z0, 11), _mm_slli_epi16(z1, 16-11));
+    __m128i c2 = _mm_mulhi_epu16((__m128i)u, c1);
+    __m128i c4 = _mm_mullo_epi16(c2,  (__m128i)q);
+    __m128i r  = _mm_sub_epi16(z0, c4);
+    return (uint16x8_t)_mm_min_epu16(r, _mm_sub_epi16(r, (__m128i)q));
+}
 #else // Векторизация не используется
 #define VL 2
-#define VSET1(x) {x,x}
 static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w, uint16_t p);
 static uint16x2_t VMULM(uint16x2_t a, uint16x2_t b, uint16x2_t w, uint16x2_t q){
     uint16x2_t r;
     r[0] = shoup_MULM(a[1], b[0], w[0], Q_PRIME);
     r[1] = shoup_MULM(a[1], b[1], w[1], Q_PRIME);
     return r;
-}
-static inline uint16x2_t VROTL(uint16x2_t a, uint16x2_t b){
-    return __builtin_shufflevector(a,b, 3, 0);
 }
 #endif
 #if VL==32
@@ -262,11 +294,108 @@ static inline uint16x32_t VROTL(uint16x32_t a, uint16x32_t b){
                                         15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30);
 }
 static const uint16x32_t xzv[] = {
+{    1, 2642, 1062, 1919,  296, 2447, 1339, 1476,  289,  331, 3253, 1756, 1197, 2304, 2277, 2055,   17, 2761,  583, 2649, 1637,  723, 2288, 1100, 1409, 2662, 3281,  233,  756, 2156, 3015, 3050,},
+{ 1729,  630,  193,  797, 3046,   56, 2240, 1333,  650, 1977, 2513,  632, 2865,   33, 1320, 1915, 1703, 1651, 2789, 1789, 1847,  952, 1461, 2687,  939, 2308, 2437, 2388,  733, 2337,  268,  641,},
+{ 2580, 1897, 2786, 3260, 1426, 2094,  535, 2882, 2319, 1435,  807,  452, 1438, 2868, 1534, 2402, 1584, 2298, 2037, 3220,  375, 2549, 2090, 1645, 1063,  319, 2773,  757, 2099,  561, 2466, 2594,},
+{ 3289,  848,  569, 1746, 2393, 2879, 1974,  821, 2647, 2617, 1481,  648, 2474, 3110, 1227,  910, 2804, 1092,  403, 1026, 1143, 2150, 2775,  886, 1722, 1212, 1874, 1029, 2110, 2935,  885, 2154,},
 };
 static const uint16x32_t wzv[] = {
+{   19,52011,20906,37778, 5827,48172,26360,29057, 5689, 6516,64039,34569,23564,45357,44825,40455,  334,54354,11477,52149,32226,14233,45042,21655,27738,52405,64591, 4586,14882,42443,59354,60043,},
+{34037,12402, 3799,15690,59964, 1102,44097,26241,12796,38919,49471,12441,56401,  649,25986,37699,33525,32502,54905,35218,36360,18741,28761,52897,18485,45436,47975,47011,14430,46007, 5275,12618,},
+{50790,37345,54846,64177,28072,41223,10532,56736,45652,28249,15886, 8898,28309,56460,30198,47286,31183,45239,40101,63390, 7382,50180,41144,32384,20926, 6279,54590,14902,41321,11044,48546,51066,},
+{64748,16694,11201,34372,47109,56677,38860,16162,52109,51519,29155,12756,48704,61224,24155,17914,55200,21497, 7933,20198,22501,42325,54629,17442,33899,23859,36892,20257,41538,57779,17422,42404,},
 };
+static inline uint16x2_t* V(uint16x2_t *a){
+    uint16x32_t *v = (uint16x32_t*)a;
+    uint16x32_t f = __builtin_shufflevector(v[0], v[1], 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,
+                        32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62);
+    uint16x32_t g = __builtin_shufflevector(v[0], v[1], 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,
+                        33,35,37,39,41,43,45,47,49,51,53,55,57,59,61,63);
+    v[0] = f, v[1] = g;
+    return a;
+}
+void NTT_CT_butterfly_2xVL(uint16x32_t *f_, const uint16x32_t z, const uint16x32_t w, uint16x32_t p){
+    uint16x32_t a,b,f,g,zv,wv;
+    f = f_[0], g = f_[1]; 
+    zv = __builtin_shuffle(z, (uint16x32_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x32_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){ 0, 1, 2, 3,  4, 5, 6, 7,  8, 9,10,11, 12,13,14,15, 32,33,34,35, 36,37,38,39, 40,41,42,43, 44,45,46,47});
+    g = __builtin_shuffle(a, b, (uint16x32_t){16,17,18,19, 20,21,22,23, 24,25,26,27, 28,29,30,31, 48,49,50,51, 52,53,54,55, 56,57,58,59, 60,61,62,63});
+    zv = __builtin_shuffle(z, (uint16x32_t){2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3});
+    wv = __builtin_shuffle(w, (uint16x32_t){2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){0,1, 2, 3,  4, 5, 6, 7, 32,33,34,35, 36,37,38,39, 16,17,18,19, 20,21,22,23, 48,49,50,51, 52,53,54,55});
+    g = __builtin_shuffle(a, b, (uint16x32_t){8,9,10,11, 12,13,14,15, 40,41,42,43, 44,45,46,47, 24,25,26,27, 28,29,30,31, 56,57,58,59, 60,61,62,63});
+    zv = __builtin_shuffle(z, (uint16x32_t){4,4,4,4,4,4,4,4, 5,5,5,5,5,5,5,5, 6,6,6,6,6,6,6,6, 7,7,7,7,7,7,7,7});
+    wv = __builtin_shuffle(w, (uint16x32_t){4,4,4,4,4,4,4,4, 5,5,5,5,5,5,5,5, 6,6,6,6,6,6,6,6, 7,7,7,7,7,7,7,7});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){ 0, 1, 2, 3, 32,33,34,35,  8, 9,10,11, 40,41,42,43, 16,17,18,19, 48,49,50,51, 24,25,26,27, 56,57,58,59});
+    g = __builtin_shuffle(a, b, (uint16x32_t){ 4, 5, 6, 7, 36,37,38,39, 12,13,14,15, 44,45,46,47, 20,21,22,23, 52,53,54,55, 28,29,30,31, 60,61,62,63});
+    zv = __builtin_shuffle(z, (uint16x32_t){8,8,8,8, 9,9,9,9, 10,10,10,10, 11,11,11,11, 12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15});
+    wv = __builtin_shuffle(w, (uint16x32_t){8,8,8,8, 9,9,9,9, 10,10,10,10, 11,11,11,11, 12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){ 0, 1, 32,33, 4, 5, 36,37,  8, 9, 40,41, 12,13, 44,45, 16,17, 48,49, 20,21, 52,53, 24,25, 56,57, 28,29, 60,61});
+    g = __builtin_shuffle(a, b, (uint16x32_t){ 2, 3, 34,35, 6, 7, 38,39, 10,11, 42,43, 14,15, 46,47, 18,19, 50,51, 22,23, 54,55, 26,27, 58,59, 30,31, 62,63});
+    zv = __builtin_shuffle(z, (uint16x32_t){16,16, 17,17, 18,18, 19,19, 20,20, 21,21, 22,22, 23,23, 24,24, 25,25, 26,26, 27,27, 28,28, 29,29, 30,30, 31,31});
+    wv = __builtin_shuffle(w, (uint16x32_t){16,16, 17,17, 18,18, 19,19, 20,20, 21,21, 22,22, 23,23, 24,24, 25,25, 26,26, 27,27, 28,28, 29,29, 30,30, 31,31});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){0,32, 2,34, 4,36, 6,38, 8,40,10,42,12,44,14,46,16,48,18,50,20,52,22,54,24,56,26,58,28,60,30,62});
+    g = __builtin_shuffle(a, b, (uint16x32_t){1,33, 3,35, 5,37, 7,39, 9,41,11,43,13,45,15,47,17,49,19,51,21,53,23,55,25,57,27,59,29,61,31,63});
+    f_[0] = f, f_[1] = g;
+}
+void NTT_GS_butterfly_2xVL(uint16x32_t *f_, const uint16x32_t z, const uint16x32_t w, uint16x32_t p){
+    uint16x32_t a,b,f,g,zv,wv;
+    a = f_[0], b = f_[1]; 
+    f = __builtin_shuffle(a, b, (uint16x32_t){0,32, 2,34, 4,36, 6,38, 8,40,10,42,12,44,14,46,16,48,18,50,20,52,22,54,24,56,26,58,28,60,30,62});
+    g = __builtin_shuffle(a, b, (uint16x32_t){1,33, 3,35, 5,37, 7,39, 9,41,11,43,13,45,15,47,17,49,19,51,21,53,23,55,25,57,27,59,29,61,31,63});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x32_t){31,31, 30,30, 29,29, 28,28, 27,27, 26,26, 25,25, 24,24, 23,23, 22,22, 21,21, 20,20, 19,19, 18,18, 17,17, 16,16});
+    wv = __builtin_shuffle(w, (uint16x32_t){31,31, 30,30, 29,29, 28,28, 27,27, 26,26, 25,25, 24,24, 23,23, 22,22, 21,21, 20,20, 19,19, 18,18, 17,17, 16,16});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){ 0, 1, 32,33, 4, 5, 36,37,  8, 9, 40,41, 12,13, 44,45, 16,17, 48,49, 20,21, 52,53, 24,25, 56,57, 28,29, 60,61});
+    g = __builtin_shuffle(a, b, (uint16x32_t){ 2, 3, 34,35, 6, 7, 38,39, 10,11, 42,43, 14,15, 46,47, 18,19, 50,51, 22,23, 54,55, 26,27, 58,59, 30,31, 62,63});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x32_t){15,15,15,15,14,14,14,14, 13,13,13,13,12,12,12,12, 11,11,11,11,10,10,10,10, 9,9,9,9,8,8,8,8});
+    wv = __builtin_shuffle(w, (uint16x32_t){15,15,15,15,14,14,14,14, 13,13,13,13,12,12,12,12, 11,11,11,11,10,10,10,10, 9,9,9,9,8,8,8,8});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){ 0, 1, 2, 3, 32,33,34,35,  8, 9,10,11, 40,41,42,43, 16,17,18,19, 48,49,50,51, 24,25,26,27, 56,57,58,59});
+    g = __builtin_shuffle(a, b, (uint16x32_t){ 4, 5, 6, 7, 36,37,38,39, 12,13,14,15, 44,45,46,47, 20,21,22,23, 52,53,54,55, 28,29,30,31, 60,61,62,63});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x32_t){7,7,7,7,7,7,7,7, 6,6,6,6,6,6,6,6, 5,5,5,5,5,5,5,5, 4,4,4,4,4,4,4,4});
+    wv = __builtin_shuffle(w, (uint16x32_t){7,7,7,7,7,7,7,7, 6,6,6,6,6,6,6,6, 5,5,5,5,5,5,5,5, 4,4,4,4,4,4,4,4});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){0,1, 2, 3,  4, 5, 6, 7, 32,33,34,35, 36,37,38,39, 16,17,18,19, 20,21,22,23, 48,49,50,51, 52,53,54,55});
+    g = __builtin_shuffle(a, b, (uint16x32_t){8,9,10,11, 12,13,14,15, 40,41,42,43, 44,45,46,47, 24,25,26,27, 28,29,30,31, 56,57,58,59, 60,61,62,63});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x32_t){3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2});
+    wv = __builtin_shuffle(w, (uint16x32_t){3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x32_t){ 0, 1, 2, 3,  4, 5, 6, 7,  8, 9,10,11, 12,13,14,15, 32,33,34,35, 36,37,38,39, 40,41,42,43, 44,45,46,47});
+    g = __builtin_shuffle(a, b, (uint16x32_t){16,17,18,19, 20,21,22,23, 24,25,26,27, 28,29,30,31, 48,49,50,51, 52,53,54,55, 56,57,58,59, 60,61,62,63});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x32_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x32_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    b = VMULM(b, zv, wv, p);
+    f_[0] = a, f_[1] = b;
+}
 #elif VL==16
-#define uint16xVL_t uint16x16_t
+typedef uint16x16_t uint16xVL_t;
 #define VSET1(x) {x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x}
 static inline uint16x16_t VROTL(uint16x16_t a, uint16x16_t b){
     return __builtin_shufflevector(a,b, 31, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14);
@@ -301,8 +430,104 @@ static inline uint16x2_t* V(uint16x2_t *a){
     v[0] = f, v[1] = g;
     return a;
 }
+/*! \brief Оптимизированная версия NTT_CT_butterfly_2xVL для использования с векторами x16. 
+
+    Идея данного алгоритма в том, чтобы использовать перестановки так чтобы на каждом шаге размещение элементов вектора f и g 
+    соответствовало входному порядку элементов вектора. Перестановки из операции BaseCaseMultiply_2xVL исключаются за счет выходных перестановок. 
+    
+ */
+void NTT_CT_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16_t w, uint16x16_t p){
+    uint16x16_t a,b,f,g,zv,wv;
+    f = f_[0], g = f_[1]; 
+    zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    zv = __builtin_shuffle(z, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
+    wv = __builtin_shuffle(w, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
+    zv = __builtin_shuffle(z, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
+    wv = __builtin_shuffle(w, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    zv = __builtin_shuffle(z, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
+    wv = __builtin_shuffle(w, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    f_[0] = f, f_[1] = g;
+}
+/*! \brief Векторная бабочка обратного преобразования NTT для векторов длины 2xVL 
+    \param f_ вектора для преобразования
+    \param z вектор степеней корня из 1, используются значения того же вектора, 
+    что и в прямом преобразовании, но в обратном порядке
+
+    zr[i] = _shuffle(z[7-i], {0,1,3,2,7,6,5,4,15,14,13,12,11,10,9,8});
+    zr*z = -1 (mod q)
+
+    \param w константы для Shoup multiplication
+
+    \note модульную операцию сложения и вычитания можно заменить на обычное сложение, 
+    в тех случаях когда поле операции идет умножение и редуцирование по модулю (VMULM). 
+ */
+void NTT_GS_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16_t w, uint16x16_t p){
+    uint16x16_t a,b,f,g,zv,wv;
+    a = f_[0], b = f_[1]; 
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
+    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){15,15,14,14, 13,13,12,12, 11,11,10,10, 9,9,8,8});
+    wv = __builtin_shuffle(w, (uint16x16_t){15,15,14,14, 13,13,12,12, 11,11,10,10, 9,9,8,8});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){7,7,7,7, 6,6,6,6, 5,5,5,5, 4,4,4,4});
+    wv = __builtin_shuffle(w, (uint16x16_t){7,7,7,7, 6,6,6,6, 5,5,5,5, 4,4,4,4});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
+    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2});
+    wv = __builtin_shuffle(w, (uint16x16_t){3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
+    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
+    b = VMULM(b, zv, wv, p);
+    f_[0] = a, f_[1] = b;
+}
 #elif VL==8
 #define uint16xVL_t uint16x8_t
+#define VSET1(x) {x,x,x,x, x,x,x,x}
+static inline uint16x8_t VROTL(uint16x8_t a, uint16x8_t b){
+    return __builtin_shufflevector(a,b, 15,0,1,2, 3,4,5,6);
+}
+static inline uint16x2_t* V(uint16x2_t *a){
+    uint16x8_t *v = (uint16x8_t*)a;
+    uint16x8_t f = __builtin_shufflevector(v[0], v[1], 0,2,4,6,8,10,12,14);
+    uint16x8_t g = __builtin_shufflevector(v[0], v[1], 1,3,5,7,9,11,13,15);
+    v[0] = f, v[1] = g;
+    return a;
+}
 static const uint16x8_t xzv[] = {
 {    1,  296,  289,  331,   17, 2761,  583, 2649,},
 { 1729, 2447, 3253, 1756, 1637,  723, 2288, 1100,},
@@ -339,21 +564,104 @@ static const uint16x8_t wzv[] = {
 {11201,38860,48704,61224,33899,23859,36892,20257,},
 {34372,16162,24155,17914,41538,57779,17422,42404,},
 };
+void NTT_CT_butterfly_2xVL(uint16x8_t *f_, const uint16x8_t z, const uint16x8_t w, uint16x8_t p){
+    uint16x8_t a,b,f,g,zv,wv;
+    f = f_[0], g = f_[1]; 
+    zv = __builtin_shuffle(z, (uint16x8_t){1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x8_t){1,1,1,1,1,1,1,1});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x8_t){0,1, 2, 3,  8, 9,10,11});
+    g = __builtin_shuffle(a, b, (uint16x8_t){4,5, 6, 7, 12,13,14,15});
+    zv = __builtin_shuffle(z, (uint16x8_t){2,2,2,2, 3,3,3,3});
+    wv = __builtin_shuffle(w, (uint16x8_t){2,2,2,2, 3,3,3,3});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x8_t){ 0, 1,  8, 9, 4, 5, 12,13});
+    g = __builtin_shuffle(a, b, (uint16x8_t){ 2, 3, 10,11, 6, 7, 14,15});
+    zv = __builtin_shuffle(z, (uint16x8_t){4,4, 5,5, 6,6, 7,7});
+    wv = __builtin_shuffle(w, (uint16x8_t){4,4, 5,5, 6,6, 7,7});
+    g = VMULM(g, zv,wv, p);
+        a = VADDM(f, g, p);
+        b = VSUBM(f, g, p);
+    f = __builtin_shuffle(a, b, (uint16x8_t){0,8, 2,10, 4,12, 6,14});
+    g = __builtin_shuffle(a, b, (uint16x8_t){1,9, 3,11, 5,13, 7,15});
+    f_[0] = f, f_[1] = g;
+}
+void NTT_GS_butterfly_2xVL(uint16x8_t *f_, const uint16x8_t z, const uint16x8_t w, uint16x8_t p){
+    uint16x8_t a,b,f,g,zv,wv;
+    a = f_[0], b = f_[1]; 
+    f = __builtin_shuffle(a, b, (uint16x8_t){0,8, 2,10, 4,12, 6,14});
+    g = __builtin_shuffle(a, b, (uint16x8_t){1,9, 3,11, 5,13, 7,15});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x8_t){7,7, 6,6, 5,5, 4,4});
+    wv = __builtin_shuffle(w, (uint16x8_t){7,7, 6,6, 5,5, 4,4});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x8_t){ 0, 1,  8, 9, 4, 5, 12,13});
+    g = __builtin_shuffle(a, b, (uint16x8_t){ 2, 3, 10,11, 6, 7, 14,15});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x8_t){3,3,3,3, 2,2,2,2});
+    wv = __builtin_shuffle(w, (uint16x8_t){3,3,3,3, 2,2,2,2});
+    b = VMULM(b, zv, wv, p);
+    f = __builtin_shuffle(a, b, (uint16x8_t){0, 1, 2, 3,  8, 9,10,11});
+    g = __builtin_shuffle(a, b, (uint16x8_t){4, 5, 6, 7, 12,13,14,15});
+    a = VADDM(g, f, p);
+    b = VSUBM(g, f, p);
+    zv = __builtin_shuffle(z, (uint16x8_t){1,1,1,1,1,1,1,1});
+    wv = __builtin_shuffle(w, (uint16x8_t){1,1,1,1,1,1,1,1});
+    b = VMULM(b, zv, wv, p);
+    f_[0] = a, f_[1] = b;
+}
+#elif VL==4
+typedef uint16x4_t uint16xVL_t;
+#define VSET1(x) {x,x,x,x}
+static inline uint16x2_t VROTL(uint16x2_t a, uint16x2_t b){
+    return __builtin_shufflevector(a,b, 7, 0,1,2,3);
+}
+static inline uint16x2_t* V(uint16x2_t *a){
+    uint16x4_t *v = (uint16x2_t*)a;
+    uint16x4_t f = __builtin_shufflevector(v[0], v[1], 0,2,4,6);
+    uint16x4_t g = __builtin_shufflevector(v[0], v[1], 1,3,5,7);
+    v[0] = f, v[1] = g;
+    return a;
+}
 #else // используется для тестирования
+typedef uint16x2_t uint16xVL_t; 
+#define VSET1(x) {x,x}
+static inline uint16x2_t VROTL(uint16x2_t a, uint16x2_t b){
+    return __builtin_shufflevector(a,b, 3, 0);
+}
+static inline uint16x2_t* V(uint16x2_t *a){
+    uint16x2_t *v = (uint16x2_t*)a;
+    uint16x2_t f = __builtin_shufflevector(v[0], v[1], 0,2);
+    uint16x2_t g = __builtin_shufflevector(v[0], v[1], 1,3);
+    v[0] = f, v[1] = g;
+    return a;
+}
+
 #endif
+
+
+static inline uint32_t MOD1(uint32_t r, uint32_t p) {
+    return ((uint32_t)(r-p)<r)? r-p:r;
+}
 
 /*! Редуцирование по модулю простого числа, с использованием Барретта 
 Метод проверяем на всех числах 0<2^15
 Константа Q выбирается как число бит простого числа минус 1. 
  */
 static uint32_t MODB(uint32_t a, uint32_t q, uint16_t U) {
-const int Q = 11;
+const int Q = 11;//31-__builtin_clz(q);//11;
 const int L = Q+16;
     uint16_t Ur = (1uL<<L)/q;
     uint32_t c2 = Ur*(a>>Q);// mul hi
-     int16_t c4 = a - (int16_t)(q*(c2>>(L-Q)));
+    int16_t c4 = a - (int16_t)(q*(c2>>(L-Q)));
     if (c4>=q) c4 -= q;
-    return c4;
+    return c4;//((uint16_t)(c4-q)<(uint16_t)c4)? c4-q: c4;
 }
 /*! signed Montogomery multiplication with precomputed qm = -q^{-1} mod 2^{16} */
 static inline int16_t  mont_MULM(int16_t a, int16_t b){
@@ -370,8 +678,8 @@ static inline int16_t  mont_MULM(int16_t a, int16_t b){
 }
 static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w, uint16_t p){
     uint16_t q = (a*(uint32_t)w)>>16;
-    int16_t r0= (a*b);
-    int16_t r1=  q*p;
+    uint16_t r0= (a*b);
+    uint16_t r1=  q*p;
     uint16_t r = r0 - r1;
     return ((uint16_t)(r-p)<r)? r-p:r;
 }
@@ -606,91 +914,8 @@ else {
 }
 #endif
 }
-/*! \brief Оптимизированная версия NTT_CT_butterfly_2xVL для использования с векторами x16. 
 
-    Идея данного алгоритма в том, чтобы использовать перестановки так чтобы на каждом шаге размещение элементов вектора f и g 
-    соответствовало входному порядку элементов вектора. Престанвки из операции BaseCaseMultiply_2xVL исключаются за счет выходных перестановок. 
-    
- */
-void NTT_CT_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16_t w, uint16x16_t p){
-    uint16x16_t a,b,f,g,zv,wv;
-    f = f_[0], g = f_[1]; 
-    zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
-    wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
-    g = VMULM(g, zv,wv, p);
-        a = VADDM(f, g, p);
-        b = f+p-g;//VSUBM(f, g, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
-    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
-    zv = __builtin_shuffle(z, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
-    wv = __builtin_shuffle(w, (uint16x16_t){2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3});
-    g = VMULM(g, zv,wv, p);
-        a = VADDM(f, g, p);
-        b = f+p-g;//VSUBM(f, g, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
-    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
-    zv = __builtin_shuffle(z, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
-    wv = __builtin_shuffle(w, (uint16x16_t){4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7});
-    g = VMULM(g, zv,wv, p);
-        a = VADDM(f, g, p);
-        b = f+p-g;//VSUBM(f, g, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
-    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
-    zv = __builtin_shuffle(z, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
-    wv = __builtin_shuffle(w, (uint16x16_t){8,8,9,9, 10,10,11,11, 12,12,13,13, 14,14,15,15});
-    g = VMULM(g, zv,wv, p);
-        a = VADDM(f, g, p);
-        b = f+p-g;//VSUBM(f, g, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
-    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
-    f_[0] = f, f_[1] = g;
-}
-/*! \brief Векторная бабочка обратного преобразования NTT для векторов длины 2xVL 
-    \param f_ вектора для преобразования
-    \param z вектор степеней корня из 1, используются значения того же вектора, 
-    что и в прямом преобразовании, но в обратном порядке
 
-    zr[i] = _shuffle(z[7-i], {0,1,3,2,7,6,5,4,15,14,13,12,11,10,9,8});
-    zr*z = -1 (mod q)
-
-    \param w константы для Shoup multiplication
-
-    \note модульную операцию сложения и вычитания можно заменить на обычное сложение, 
-    в тех случаях когда поле операции идет умножение и редуцирование по модулю (VMULM). 
- */
-void NTT_GS_butterfly_2xVL(uint16x16_t *f_, const uint16x16_t z, const uint16x16_t w, uint16x16_t p){
-    uint16x16_t a,b,f,g,zv,wv;
-    a = f_[0], b = f_[1]; 
-    f = __builtin_shuffle(a, b, (uint16x16_t){0,16, 2,18, 4,20, 6,22, 8,24,10,26,12,28,14,30});
-    g = __builtin_shuffle(a, b, (uint16x16_t){1,17, 3,19, 5,21, 7,23, 9,25,11,27,13,29,15,31});
-    a = VADDM(g, f, p);
-    b = g+p-f;//VSUBM(g, f, p);
-    zv = __builtin_shuffle(z, (uint16x16_t){15,15,14,14, 13,13,12,12, 11,11,10,10, 9,9,8,8});
-    wv = __builtin_shuffle(w, (uint16x16_t){15,15,14,14, 13,13,12,12, 11,11,10,10, 9,9,8,8});
-    b = VMULM(b, zv, wv, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1,16,17, 4, 5,20,21, 8, 9,24,25,12,13,28,29});
-    g = __builtin_shuffle(a, b, (uint16x16_t){ 2, 3,18,19, 6, 7,22,23,10,11,26,27,14,15,30,31});
-    a = VADDM(g, f, p);
-    b = g+p-f;//VSUBM(g, f, p);
-    zv = __builtin_shuffle(z, (uint16x16_t){7,7,7,7, 6,6,6,6, 5,5,5,5, 4,4,4,4});
-    wv = __builtin_shuffle(w, (uint16x16_t){7,7,7,7, 6,6,6,6, 5,5,5,5, 4,4,4,4});
-    b = VMULM(b, zv, wv, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){ 0, 1, 2, 3,16,17,18,19, 8, 9,10,11,24,25,26,27});
-    g = __builtin_shuffle(a, b, (uint16x16_t){ 4, 5, 6, 7,20,21,22,23,12,13,14,15,28,29,30,31});
-    a = VADDM(g, f, p);
-    b = g+p-f;//VSUBM(g, f, p);
-    zv = __builtin_shuffle(z, (uint16x16_t){3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2});
-    wv = __builtin_shuffle(w, (uint16x16_t){3,3,3,3,3,3,3,3, 2,2,2,2,2,2,2,2});
-    b = VMULM(b, zv, wv, p);
-    f = __builtin_shuffle(a, b, (uint16x16_t){0,1, 2, 3,  4, 5, 6, 7, 16,17,18,19, 20,21,22,23});
-    g = __builtin_shuffle(a, b, (uint16x16_t){8,9,10,11, 12,13,14,15, 24,25,26,27, 28,29,30,31});
-    a = VADDM(g, f, p);
-    b = g+p-f;//VSUBM(g, f, p);
-    zv = __builtin_shuffle(z, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
-    wv = __builtin_shuffle(w, (uint16x16_t){1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1});
-    b = VMULM(b, zv, wv, p);
-    f_[0] = a, f_[1] = b;
-}
 static uint16_t zeta2[] = {// степени zeta^{2 BitRev(i)+1} mod q
   17, 3312,2761,  568, 583, 2746,2649,  680,
 1637, 1692, 723, 2606,2288, 1041,1100, 2229,
@@ -764,7 +989,7 @@ uint16x2_t* iNTT(uint16x2_t *f){
         NTT_GS_butterfly(f+off/2, len, z);
     }
 #endif
-    int i=VL/2 -1;
+    int i=N/2/VL -1;
     for (int len =2*VL; len<=N/2; len<<=1)
     for (int off=0; off<N; off+=2*len){
         uint16_t z = xzv[i][0];//zeta[i];//g[BitRev7(i)]; 
@@ -804,7 +1029,7 @@ static void BaseCaseMultiply_2xVL(uint16xVL_t *a, uint16xVL_t *b, uint16xVL_t z,
     uint16xVL_t r01 = VMULM_barrett(a[0], b[1], u, p);
     uint16xVL_t r10 = VMULM_barrett(a[1], b[0], u, p);
                 r11 = VMULM(r11, z, w, p);
-                //r11 = VMOD1(r11, p);
+                r11 = VMOD1(r11, p);
     uint16xVL_t c0 = VADDM(r00, r11, p);
     uint16xVL_t c1 = VADDM(r10, r01, p);
     a[0] = c0, a[1] = c1;
@@ -1035,6 +1260,7 @@ static void v_print(uint16x16_t f, uint16x16_t g){
     printf("\n");
     
 }
+#if 0
 // этот тестовый пример для отладки перестановок векторов в NTT_CT_butterfly_2xVL
 static void NTT_CT_butterfly_2xVL_test(){
     uint16x16_t a,b;
@@ -1158,7 +1384,7 @@ static void NTT_CT_butterfly_2xVL_test(){
 #endif
 
 }
-
+#endif
 
 static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
 {
@@ -1445,14 +1671,14 @@ if (1) {// проверка умножения полиномов
     }
     if (1) {// проверка редукции Барретта
         uint32_t p = Q_PRIME;
-        uint16x16_t P = VSET1(Q_PRIME);
-        uint16x16_t Ur = VSET1(U_BARRETT);
+        uint16xVL_t P = VSET1(Q_PRIME);
+        uint16xVL_t Ur = VSET1(U_BARRETT);
         uint16_t r;
-        for (uint16_t a=0; a<p; a++){
+        for (uint16_t a=0; a<p*2; a++){
             for (uint16_t b=0; b<p; b++){
-                uint16x16_t av = VSET1(a);
-                uint16x16_t bv = VSET1(b);
-                uint16x16_t r = VMULM_barrett(av,bv, Ur, P);
+                uint16xVL_t av = VSET1(a);
+                uint16xVL_t bv = VSET1(b);
+                uint16xVL_t r = VMULM_barrett(av,bv, Ur, P);
                 if (r[0] != (a*(uint32_t)b)%p) {
                     printf("fail mont mul %d * %d = %d != %d\n", a, b, r, (a*(uint32_t)b)%p);
                     //break;
@@ -1473,14 +1699,14 @@ if (1) {// проверка умножения полиномов
             int i = L+k;
             g = POWM(z, BitRev7(k), p);
             w = ((uint32_t)(g) <<16)/p;
-//            printf("{%2d,", k);
-            printf("{%5d,", g);
+            printf("{%2d,", k);
+//            printf("{%5d,", g);
             for (int len=vl, l=0; len>=2; len>>=1, l++){// стадия разложения длина
                 for (int offs=0,j=0; offs<vl; offs+=len, j++){// смещение число шагов N/2len
                     g = POWM(z, BitRev7(i+j), p);
                     w  = ((uint32_t)g <<16)/p;
-                    printf("%5d,", g);
-//                    printf("%2d ", i+j);
+//                    printf("%5d,", g);
+                    printf("%2d ", i+j);
                 }
                 i += (L+k)<<l;
             }
@@ -1504,18 +1730,11 @@ if (1) {// проверка умножения полиномов
         }
     }
     if (0) {
-        NTT_CT_butterfly_2xVL_test();
-        uint16x16_t p = VSET1(Q_PRIME);
-        uint16x16_t u = VSET1(U_BARRETT);
-        uint16x16_t v, b;
+        // NTT_CT_butterfly_2xVL_test();
+        uint16xVL_t p = VSET1(Q_PRIME);
+        uint16xVL_t u = VSET1(U_BARRETT);
+        uint16xVL_t v, b;
         for (int i=0; i<8; i++){
-            b = p - xzv[7-i];
-            b = __builtin_shuffle(b, (uint16x16_t){0,1,3,2,7,6,5,4,15,14,13,12,11,10,9,8});
-            v = VMULM_barrett(xzv[i], b, u, p);
-            for(int j=1; j<16; j++){
-                printf("%4d,", v[j]);
-            }
-            printf("\n");
         }
         printf("\n");
         return 0;
@@ -1556,11 +1775,11 @@ if (1) {// проверка умножения полиномов
     }
     if (1) {// проверка умножения методом Shoup
         printf("Shoup q=%d\n", Q_PRIME);
-        for (uint32_t a=0; a<0xFFFF; a++){
+        for (uint32_t a=0; a<=0xFFFF; a++){
             for (uint16_t b=0; b<Q_PRIME; b++){
                 uint16_t w = shoup_div(b);//((uint32_t)b<<16)/Q_PRIME;
-                //uint16_t r = shoup_MULM(a, b, w, Q_PRIME);
-                uint16_t r = mod1(a*b,Q_PRIME);
+                uint16_t r = shoup_MULM(a, b, w, Q_PRIME);
+                //uint16_t r = mod1(a*b,Q_PRIME);
                 if (r != (a*(uint32_t)b)%Q_PRIME) 
                     printf("fail shoup mul %d * %d = %d != %d\n", a, b, r, (a*b)%Q_PRIME);
             }
