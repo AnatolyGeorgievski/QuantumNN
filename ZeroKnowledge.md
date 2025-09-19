@@ -2907,6 +2907,10 @@ const int L = Q+16;
   + функция хеширования тензоров на кольце полиномов $\mathbb{Z}_q/\langle x^N + 1\rangle$. 
   + Алгоритм параллельного вычисления вектора хещей с разными $\{q_i\}$ для фильтра Блума.
   + Алгоритм параллельного вычисления Sbox (возведения в степень) по модулю.
+* [qnn_rns.c](qnn_rns.c) 
+-- Residue Number System (RNS), непозиционная система остаточных классов
+  + кодирование в RNS
+  + реализация рашсширения базиса RNS через MRC
 * [qnn_rag.c](qnn_rag.c) 
 -- реализация поиска по базе данных (тензоров, изображений и текстов) с использованием векторов семантических признаков
 
@@ -3020,9 +3024,15 @@ e = \left\lfloor \frac{\sum_{i=0}^{k-1} [x_i \cdot \tilde{p}_i]_{p_i} \cdot \hat
 = \left\lfloor \sum_{i=0}^{k-1} \frac{[x_i \cdot \tilde{p}_i]_{p_i}}{p_i} \right\rceil.
 ```
 
-Чтобы получить $e$, мы вычисляем для каждого $i \in \{0, \dots, k-1\}$ элемент $y_i := [x_i \cdot \tilde{p}_i]_{p_i}$ используя арифметику целых чисел одинарной точности, а затем рациональное число $z_i := y_i / p_i$ в формате с плавающей точкой. Затем суммируем все $z_i$ и округляем результат, чтобы получить $e$. После того как мы получили значение $e$, а также все $y_i$, мы можем напрямую вычислить уравнение (2) по модулю $q$, чтобы получить 
+Чтобы получить $e$, мы вычисляем для каждого $i \in \{0, \dots, k-1\}$ элемент $\xi_i := [x_i \cdot \tilde{p}_i]_{p_i}$ используя арифметику целых чисел, а затем рациональное число $z_i := \xi_i / p_i$ в формате с плавающей точкой одинарной точности. Затем суммируем все $z_i$ и округляем результат, чтобы получить $e$. {округление к меньшему для чисел без знака, проверить}: 
 ```math
-[x]_q = \left[ \left( \sum_{i=0}^{k-1} y_i \cdot [\hat{p}_i]_q \right) - e \cdot [P]_q \right]_q~.
+e+{x\over P} = \sum_{i=0}^{k-1} \frac{\xi_i}{p_i}, \quad e = \left\lfloor\sum_{i=0}^{k-1} \frac{\xi_i}{p_i}\right\rfloor, 
+```
+-- в такой форме должно быть справедливо для модульной арифметики без знака [23].
+
+После того как мы получили значение $e$, а также все $\xi_i$, мы можем напрямую вычислить уравнение (2) по модулю $q$, чтобы получить 
+```math
+[x]_q = \left[ \left( \sum_{i=0}^{k-1} \xi_i \cdot [\hat{p}_i]_q \right) - e \cdot [P]_q \right]_q~.
 ```
 Заметим, если все значения $[\hat{p}_i]_q$ и $[P]_q$ представить в качестве элементов вектора, то вычисление сводится к операции скалярного произведения векторов размерности $k+1$ по модулю $q$.
 
@@ -3038,7 +3048,7 @@ x + e\cdot P = \sum_{i=1}^n \left[x_i \cdot \hat{p}^{-1}_i\right]_{p_i} \cdot \h
 
 где
 ```math
-\hat{p}_i \times \left( \frac{P}{p_i} \right)^{-1}_{p_i} \equiv 1 \ \pmod{ P}
+\hat{p}_i \times \left( \frac{P}{p_i} \right)^{-1}_{p_i} \equiv 1 \ \pmod{ P?}
 ```
 
 Пусть $\mathcal{D} = \{p_0, \ldots, p_{k-1}, q_0, \ldots, q_{\ell-1}\}$ некоторый базис. Пусть $\mathcal{B} = \{p_0, \ldots, p_{k-1}\}$ и $\mathcal{C} = \{q_0, \ldots, q_{\ell-1}\}$ будут его подпространствами. Обозначим их произведения через $P = \prod_{i=0}^{k-1} p_i$ и $Q = \prod_{j=0}^{\ell-1} q_j$ соответственно. Тогда можно преобразовать RNS-представление $[a]_\mathcal{C} = (a^{(0)}, \ldots, a^{(\ell-1)}) \in \mathbb{Z}_{q_0} \times \cdots \times \mathbb{Z}_{q_{\ell-1}}$ целого числа $a \in \mathbb{Z}_Q$ в элемент $\mathbb{Z}_{p_0} \times \cdots \times \mathbb{Z}_{p_{k-1}}$ путём вычисления
@@ -3066,17 +3076,25 @@ $x=x_{0}+x_{1}\cdot p_{0}+x_{2}\cdot p_{0}\cdot p_{1}+\dots +x_{k-1}\cdot p_{0}\
 
 Вычислив по порядку все коэффициенты $x_{i}$ для $i\in \{0,1,\dots ,k-1\}$ мы сможем подставить их в формулу и найти искомое решение:
 
-Обозначим через $r_{ij}=p_{i}^{-1}{\mod {p_{j}}}$ и рассмотрим выражение для $x$ по модулю $p_{i}$ получим:
+
+[Knuth2, 4.3.2]: Обозначим через $c_{ij}=p_{i}^{-1}{\pmod{p_{j}}}$, для $1 \leqslant i < j < k$ и рассмотрим выражение для $x$ по модулю $p_{i}$ получим:
 ```math
 \begin{aligned}
 x_{0}&=r_{0}\\
 r_{1}&=(x_{0}+x_{1}p_{0}){\pmod {p_{1}}}\\
-x_{1}&=(r_{1}-x_{0}) r_{01}{\pmod {p_{1}}}\\
+x_{1}&=(r_{1}-x_{0}) c_{01}{\pmod {p_{1}}}\\
 r_{2}&=(x_{0}+x_{1}p_{0}+x_{2}p_{0}p_{1}){\pmod{p_{2}}}\\
-x_{2}&=((r_{2}-x_{0})r_{02}-x_{1})r_{12}{\pmod{p_{2}}}
+x_{2}&=((r_{2}-x_{0})c_{02}-x_{1})c_{12}{\pmod{p_{2}}}\\
+& ~. \quad .\quad .\\
+x_{i}&=(...((r_{i}-x_{0})c_{0,i}-x_{1})c_{1,i}-\cdots -x_{i-1})c_{(i-1),i}{\pmod {p_{i}}}.
 \end{aligned}
 ```
 и так далее.
+```math
+x = x_0 + x_1 p_0 + x_2 p_0 p_1 + \cdots + x_{k-1} p_0 p_1 \cdots p_{k-2}
+```
+
+* [Knuth2] Knuth, D. E. 2014. The Art of Computer Programming, Volume 2: Seminumerical Algorithms. Addison-Wesley Professional. ISBN:978-0-201-89684-8
 
 * [26] Harvey L. Garner. 1959. The residue number system. In Papers Presented at
 the the March 3-5, 1959, Western Joint Computer Conference (IRE-AIEE-ACM ’59
@@ -3107,6 +3125,15 @@ https://doi.org/10.1145/1457838.1457864
 2. $\text{for } k \text{ from } n-2 \text{ to } 0$
 3. $\quad x = x\cdot p_k + v_k$
 4. $\text{return }x$
+
+Дополнительная литература
+
+* [22] N.S. Szabo, R.I. Tanaka. Residue Arithmetic and Its Applications to Computer Technology
+* [[23](https://www.iacr.org/archive/eurocrypt2000/1807/18070529-new.pdf)] Kawamura, et al. Cox-Rower Architecture for Fast Parallel Montgomery Multiplication
+* [[24]()] An RNS Montgomery Modular Multiplication Algorithm
+* [[2025/1068](https://eprint.iacr.org/2025/1068.pdf)] Efficient Modular Multiplication Using Vector Instructions on Commodity Hardware
+
+* [25] Kawamura, et al. Efficient Algorithms for Sign Detection in RNS Using Approximate Reciprocals, 2021
 
 ---
 {перенести к KEM} 

@@ -12,6 +12,7 @@
         позиционную систему из модулей
  */
 #include <stdint.h>
+#include <math.h>
 static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
 {
 	uint32_t r = b;
@@ -28,8 +29,6 @@ static inline uint32_t INVM(uint32_t a, const uint32_t q){
     return POWM(a, q-2, q);
 }
 
-#include <stdio.h>
-#include <math.h>
 /*! \brief Кодирование в базисе RNS 
     \param[in] x число
     \param[out] r вектор остатков
@@ -120,6 +119,7 @@ int64_t rns_restore(int32_t* a, const uint32_t* p, int n){
     }
     return x;
 }
+#ifdef TEST_RNS
 int32_t primes[] = {
     0x7ffd5601, 0x7ffd2601, 0x7ff8e201, 0x7ff83a01, 
     0x7ff82e01, 0x7ff04201, 0x7fee9201, 0x7fea4201,
@@ -130,8 +130,8 @@ int main(int argc, char* argv[]){
     int count = 20;
     int32_t a_rns[n];
     int32_t q = primes[n];
-    for (int64_t i=0; i<0x1FFFFFFF; i++){
-        int64_t a = i<<17;
+    for (int64_t i=0; i<0x1FFFFFF; i++){
+        int64_t a = i<<31;
         rns_encode(a, a_rns, primes, n);
         int64_t x = rns_restore(a_rns, primes, n);
         if (a!=x) {
@@ -147,3 +147,4 @@ int main(int argc, char* argv[]){
     }
     return 0;
 }
+#endif

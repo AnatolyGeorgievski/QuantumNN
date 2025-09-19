@@ -664,12 +664,12 @@ const int L = Q+16;
     return c4;//((uint16_t)(c4-q)<(uint16_t)c4)? c4-q: c4;
 }
 /*! signed Montogomery multiplication with precomputed qm = -q^{-1} mod 2^{16} */
-static inline int16_t  mont_MULM(int16_t a, int16_t b){
+static inline int16_t  mont_MULM(int16_t a, int16_t b, int16_t q, int16_t qm){
 
     int32_t z = (a*(int32_t)b);// signed high 16 bit
     int16_t z0=  a*(int32_t)b; // signed low 16 bit
-    int32_t q = Q_PRIME;
-    int16_t p = Q_MONT; // mod_inverse(Q_PRIME); // 1/q mod 2^{32}
+//    int32_t q = Q_PRIME;
+    int16_t p = qm; // mod_inverse(Q_PRIME); // 1/q mod 2^{32}
     int16_t m = z0 * p; // low product z_0 (1/q)
     z = (z + m*q)>>16; // high product
     if (z<0) z+=q;
@@ -1762,14 +1762,22 @@ if (1) {// проверка умножения полиномов
     }
 #endif
     if (1) {// проверка умножения методом Монтгомери
-        uint16_t qm = -mod_inverse(Q_PRIME);
-        printf("Mont q=%d qm=%d\n", Q_PRIME, qm);
-        int16_t r;
-        for (int16_t a=0; a<0x7FFF; a++){
-            for (int32_t b=0; b<=0x7FFF; b++){
-                r = mont_MULM(a, b);
-                if (((int32_t)r<<16)%Q_PRIME != (a*(int32_t)b)%Q_PRIME) 
-                    printf("fail mont mul %d * %d = %d != %d\n", a, b, r, (a*b)%Q_PRIME);
+        uint16_t primes[] = {
+            0x101, 0x301, 0xd01, 0x1e01, 0x1f01, 0x2501, 0x2a01, 0x2e01, 0x3001, 0x3401, 0x3701, 0x3901, 0x3c01, 0x4601, 0x4801, 
+            0x4c01, 0x5701, 0x5a01, 0x5b01, 0x6401, 0x6601, 0x6901, 0x7901, 0x7b01, 0x7e01,
+        };
+        for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++){
+            uint16_t p = primes[k];//Q_PRIME2;
+
+            uint16_t qm = -mod_inverse(p);
+            printf("Mont q=%5d qm=%5d\n", p, qm);
+            int16_t r;
+            for (int16_t a=0; a<0x7FFF; a++){
+                for (int32_t b=0; b<=0x7FFF; b++){
+                    r = mont_MULM(a, b, p, qm);
+                    if (((int32_t)r<<16)%p != (a*(int32_t)b)%p) 
+                        printf("fail mont mul %d * %d = %d != %d\n", a, b, r, (a*b)%p);
+                }
             }
         }
     }
@@ -1787,10 +1795,8 @@ if (1) {// проверка умножения полиномов
     }
     if (1) {// проверка умножения методом Shoup
         uint16_t primes[] = {
-            0x101, 0x301, 0xd01, 0x1f01, 0x2501, 0x2e01, 0x3001, 0x3401, 0x4c01, 25601,
-//            257, 769, 3329, 7681, 7937, 9473, 10753, 11777, 12289, 13313, 14081, 14593, 
-//            15361, 17921, 18433, 19457, 22273, 23041, 23297, 25601, 26113, 26881, 30977, 31489, 32257,
-            // 36353, 37889, 40193, 40961, 41729, 45569, 46337, 49409, 51713, 57089, 59393,
+            0x101, 0x301, 0xd01, 0x1e01, 0x1f01, 0x2501, 0x2a01, 0x2e01, 0x3001, 0x3401, 0x3701, 0x3901, 0x3c01, 0x4601, 0x4801, 
+            0x4c01, 0x5701, 0x5a01, 0x5b01, 0x6401, 0x6601, 0x6901, 0x7901, 0x7b01, 0x7e01,
         };
         for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++){
             uint16_t p = primes[k];//Q_PRIME2;
@@ -1801,7 +1807,8 @@ if (1) {// проверка умножения полиномов
             uint32_t C = div_c(p, &nd);
             int n = __builtin_clz(p)-16;
             int s = __builtin_ctz(p-1);
-            printf("Shoup q=%5d (0x%04x) a=%3d s=%2d w=(b*%08xuLL)>>%d zeta=%d\n", p, p, p>>s, s, C, nd-16, z);
+            uint16_t qm = -mod_inverse(p);
+            printf("Shoup q=%5d (0x%04x) qm=%5d a=%3d s=%2d w=(b*%08xuLL)>>%d zeta=%d\n", p, p, qm, p>>s, s, C, nd-16, z);
             for (uint32_t a=0; a<=0xFFFF; a++){
                 for (uint16_t b=0; b<p; b++){
 //                    uint16_t w = ((uint32_t)b<<16)/p;
