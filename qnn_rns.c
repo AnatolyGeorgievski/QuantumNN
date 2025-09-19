@@ -28,40 +28,50 @@ static inline uint32_t INVM(uint32_t a, const uint32_t q){
     return POWM(a, q-2, q);
 }
 
-
 #include <stdio.h>
 #include <math.h>
-
-void rns_encode(uint64_t x, uint32_t* r, const uint32_t* p, int n){
+/*! \brief Кодирование в базисе RNS 
+    \param[in] x число
+    \param[out] r вектор остатков
+    \param[in] p вектор взаимно простых модулей
+    \param[in] n количество модулей
+ */
+void rns_encode(int64_t x, int32_t* r, const uint32_t* p, int n){
     for(int i=0; i<n; i++)
         r[i] = x % p[i];
 }
-int rns_factor(int32_t* a, const uint32_t* p, int n){
-    int32_t xi[n];
-    double z = 0;
+/*! \brief Расчет множителя g для CRT */
+int32_t rns_factor(int32_t* a, const uint32_t* p, int n){
+    float z = 0;
     for(int i=0; i<n; i++){
-        uint32_t pt = 1;// \tilde{p}_i
+        int32_t pt = 1;// \tilde{p}_i
         for (int j=0; j<n; j++)
-            if (i!=j) pt = ((uint64_t)pt*p[j]) %p[i];
+            if (i!=j) pt = ((int64_t)pt*p[j]) %p[i];
         pt = INVM(pt, p[i]);
-        xi[i] = ((int64_t)a[i]* pt) % p[i];
-        z += (double)xi[i]/p[i];
+        int32_t xi = ((int64_t)a[i]* pt) % p[i];
+        z += (float)xi/p[i];
     }
-    return floor(z);
+    return rint(z);
 }
-int64_t rns_ext(int32_t* a, const uint32_t* p, int n, uint32_t q){
+/*! \brief Расширение базиса RNS
+    \param[in] a вектор остатков в RNS
+    \param[in] p вектор взаимно простых модулей
+    \param[in] n количество модулей
+    \param[in] q модуль расширения взаимно простой к {p}
+    \return число по модулю q
+ */
+int32_t rns_ext(int32_t* a, const uint32_t* p, int n, uint32_t q){
     int32_t xi[n];
     float z = 0;
     for(int i=0; i<n; i++){
-        uint32_t pt = 1;// \tilde{p}_i
+        int32_t pt = 1;// \tilde{p}_i
         for (int j=0; j<n; j++)
-            if (i!=j) pt = ((uint64_t)pt*p[j]) %p[i];
+            if (i!=j) pt = ((int64_t)pt*p[j]) %p[i];
         pt = INVM(pt, p[i]);
         xi[i] = (int64_t)a[i]* pt % p[i];
         z += (float)xi[i]/p[i];
     }
     int32_t e = rint(z);
-    //printf("e  :%d\n", e);
     int64_t x = 0;
     for(int i=0; i<n; i++){
         uint32_t ph =1;
@@ -70,21 +80,27 @@ int64_t rns_ext(int32_t* a, const uint32_t* p, int n, uint32_t q){
         x += (int64_t)xi[i]*ph %q;
     }
     x %= q;
-    uint32_t P = 1;
+    int32_t P = 1;
     for(int i=0; i<n; i++){
-        P = ((uint64_t)P*p[i]) %q;
+        P = ((int64_t)P*p[i]) %q;
     }
     x = (x + q - ((int64_t)e* P)%q) %q;
     return x;
 }
-int64_t rns_restore(uint32_t* a, const uint32_t* p, int n){
+/*! \brief Преобразование в позиционную систему из RNS через MRC
+    \param[in] a вектор остатков в RNS
+    \param[in] p вектор взаимно простых модулей
+    \param[in] n количество модулей
+    \return число в стандартной системе
+ */
+int64_t rns_restore(int32_t* a, const uint32_t* p, int n){
 // Шаг 1: Расчет коэффициентов g
     uint32_t g[n];
     g[0] = 1;
     for (int k=1; k<n; k++){
-        uint32_t P = 1;//p[0] %p[k];
+        int32_t P = 1;//p[0] %p[k];
         for(int j=0; j<k; j++)
-            if (j!=k) P = ((uint64_t)P*p[j]) %p[k];
+            if (j!=k) P = ((int64_t)P*p[j]) %p[k];
         g[k] = INVM(P, p[k]);
     }
 // Шаг 2: Расчет коэффициентов MRC из RNS 
@@ -104,24 +120,20 @@ int64_t rns_restore(uint32_t* a, const uint32_t* p, int n){
     }
     return x;
 }
-uint32_t primes[] = {
+int32_t primes[] = {
     0x7ffd5601, 0x7ffd2601, 0x7ff8e201, 0x7ff83a01, 
     0x7ff82e01, 0x7ff04201, 0x7fee9201, 0x7fea4201,
-    0xffffd001, 0xfffbb001, 0xfff16001, 0xffddb001, 
-    0xffd4b001, 0xffbd7001, 0xffb5f001, 0xffb11001, 
-    0xffae7001, 0xff83b001, 0xff5da001, 0xff502001, 
-    0xff4ae001, 0xff382001,
 };
 #include <stdio.h>
 int main(int argc, char* argv[]){
     int n = 5;
     int count = 20;
-    uint32_t a_rns[n];
-    uint32_t q = primes[n];
-    for (uint64_t i=0; i<0x1FFFFFF; i++){
-        uint64_t a = i<<17;
+    int32_t a_rns[n];
+    int32_t q = primes[n];
+    for (int64_t i=0; i<0x1FFFFFFF; i++){
+        int64_t a = i<<17;
         rns_encode(a, a_rns, primes, n);
-        uint64_t x = rns_restore(a_rns, primes, n);
+        int64_t x = rns_restore(a_rns, primes, n);
         if (a!=x) {
             printf("fail:%d %llx != %llx\n", i, a, x);
             if (--count==0)
