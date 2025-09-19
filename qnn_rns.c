@@ -13,19 +13,34 @@
  */
 #include <stdint.h>
 #include <math.h>
-static uint32_t POWM(const uint32_t b, uint32_t a, const uint32_t q)
+static inline int32_t MODB(int64_t x, const uint32_t q){
+    return ((int64_t)x)%q;
+}
+static inline int32_t ADDM(int32_t a, int32_t b, const uint32_t q){
+    return ((int64_t)a+b)%q;
+}
+static inline int32_t SUBM(int32_t a, int32_t b, const uint32_t q){
+    return ((int64_t)a-b)%q;
+}
+static inline int32_t MULM(int32_t a, int32_t b, const uint32_t q){
+    return ((int64_t)a*b)%q;
+}
+static inline int32_t SQRM(int32_t a, const uint32_t q){
+    return ((int64_t)a*a)%q;
+}
+static int32_t POWM(const int32_t b, int32_t a, const uint32_t q)
 {
-	uint32_t r = b;
-	uint32_t s = 1;
+	int32_t r = b;
+	int32_t s = 1;
     while (a!=0) {
 		if (a&1) 
-			s = ((uint64_t)s*r)%q;
-		r = ((uint64_t)r*r)%q;
+			s = MULM(s,r,q);
+		r = SQRM(r,q);
 		a>>=1;
 	}
 	return s;
 }
-static inline uint32_t INVM(uint32_t a, const uint32_t q){
+static inline int32_t INVM(int32_t a, const uint32_t q){
     return POWM(a, q-2, q);
 }
 
@@ -37,7 +52,7 @@ static inline uint32_t INVM(uint32_t a, const uint32_t q){
  */
 void rns_encode(int64_t x, int32_t* r, const uint32_t* p, int n){
     for(int i=0; i<n; i++)
-        r[i] = x % p[i];
+        r[i] = MODB(x, p[i]);
 }
 /*! \brief Расчет множителя g для CRT */
 int32_t rns_factor(int32_t* a, const uint32_t* p, int n){
@@ -45,9 +60,9 @@ int32_t rns_factor(int32_t* a, const uint32_t* p, int n){
     for(int i=0; i<n; i++){
         int32_t pt = 1;// \tilde{p}_i
         for (int j=0; j<n; j++)
-            if (i!=j) pt = ((int64_t)pt*p[j]) %p[i];
+            if (i!=j) pt = MULM(pt,p[j],p[i]);
         pt = INVM(pt, p[i]);
-        int32_t xi = ((int64_t)a[i]* pt) % p[i];
+        int32_t xi = MULM(a[i], pt, p[i]);
         z += (float)xi/p[i];
     }
     return rint(z);
@@ -63,11 +78,11 @@ int32_t rns_ext(int32_t* a, const uint32_t* p, int n, uint32_t q){
     int32_t xi[n];
     float z = 0;
     for(int i=0; i<n; i++){
-        int32_t pt = 1;// \tilde{p}_i
+        int32_t pt = 1;
         for (int j=0; j<n; j++)
-            if (i!=j) pt = ((int64_t)pt*p[j]) %p[i];
+            if (i!=j) pt = MULM(pt,p[j],p[i]);
         pt = INVM(pt, p[i]);
-        xi[i] = (int64_t)a[i]* pt % p[i];
+        xi[i] = MULM(a[i], pt, p[i]);
         z += (float)xi[i]/p[i];
     }
     int32_t e = rint(z);
@@ -75,15 +90,15 @@ int32_t rns_ext(int32_t* a, const uint32_t* p, int n, uint32_t q){
     for(int i=0; i<n; i++){
         uint32_t ph =1;
         for(int j=0; j<n; j++)
-            if (i!=j) ph = (uint64_t)ph*p[j] %q;
-        x += (int64_t)xi[i]*ph %q;
+            if (i!=j) ph = MULM(ph,p[j],q);
+        x += MULM(xi[i],ph,q);
     }
-    x %= q;
+    x = MODB(x,q);
     int32_t P = 1;
     for(int i=0; i<n; i++){
-        P = ((int64_t)P*p[i]) %q;
+        P = MULM(P,p[i],q);
     }
-    x = (x + q - ((int64_t)e* P)%q) %q;
+    x = MODB(x + q - MULM(e,P,q), q);
     return x;
 }
 /*! \brief Преобразование в позиционную систему из RNS через MRC
@@ -94,25 +109,26 @@ int32_t rns_ext(int32_t* a, const uint32_t* p, int n, uint32_t q){
  */
 int64_t rns_restore(int32_t* a, const uint32_t* p, int n){
 // Шаг 1: Расчет коэффициентов g
-    uint32_t g[n];
+    int32_t g[n];
     g[0] = 1;
     for (int k=1; k<n; k++){
-        int32_t P = 1;//p[0] %p[k];
-        for(int j=0; j<k; j++)
-            if (j!=k) P = ((int64_t)P*p[j]) %p[k];
+        int32_t P = p[0];// %p[k];
+        for(int j=1; j<k; j++)
+            if (j!=k) P = MULM(P,p[j],p[k]);
         g[k] = INVM(P, p[k]);
     }
 // Шаг 2: Расчет коэффициентов MRC из RNS 
-    int64_t x;
+    int32_t u;
     int32_t v[n];
     v[0] = a[0];
     for(int k=1; k<n; k++){
-        x = v[k-1];
+        u = v[k-1];
         for(int i=k-2; i>=0; i--)
-            x = (x*p[i] + v[i]) %p[k];
-        v[k] = ((int64_t)a[k] - x)*g[k]  %p[k];
+            u = MODB((int64_t)u*p[i] + v[i],p[k]);
+        v[k] = MULM(SUBM(a[k], u, p[k]),g[k], p[k]);
     }
 // Шаг 3: Расчет стандартного представления числа из MRC
+    int64_t x;
     x = v[n-1];
     for(int i=n-2; i>=0; i--){
         x = x*p[i] + v[i];
@@ -131,7 +147,7 @@ int main(int argc, char* argv[]){
     int32_t a_rns[n];
     int32_t q = primes[n];
     for (int64_t i=0; i<0x1FFFFFF; i++){
-        int64_t a = i<<31;
+        int64_t a = i<<33;
         rns_encode(a, a_rns, primes, n);
         int64_t x = rns_restore(a_rns, primes, n);
         if (a!=x) {
