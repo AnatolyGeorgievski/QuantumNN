@@ -119,7 +119,7 @@ RNS позволяет параллельно считать в числах с 
 
 **Алгоритм Гарнера**
 
-Рассмотрим набор модулей $(p_{0},p_{1},\dots ,p_{k-1})$, удовлетворяющих условию теоремы. Другой теоремой из теории чисел утверждается, что любое число $0\leqslant x<M=p_{0}\cdot p_{1}\cdot \ldots \cdot p_{k-1}$ однозначно представимо в виде $x=x_{0}+x_{1}\cdot p_{0}+x_{2}\cdot p_{0}\cdot p_{1}+\dots +x_{k-1}\cdot p_{0}\cdot p_{1}\cdot \ldots \cdot p_{k-1}$.
+Рассмотрим набор модулей $(p_{0},p_{1},\dots ,p_{k-1})$, удовлетворяющих условию теоремы. Другой теоремой из теории чисел утверждается, что любое число $0\leqslant x<P=p_{0}\cdot p_{1}\cdot \ldots \cdot p_{k-1}$ однозначно представимо в виде $x=x_{0}+x_{1}\cdot p_{0}+x_{2}\cdot p_{0}\cdot p_{1}+\dots +x_{k-1}\cdot p_{0}\cdot p_{1}\cdot \ldots \cdot p_{k-1}$.
 
 Вычислив по порядку все коэффициенты $x_{i}$ для $i\in \{0,1,\dots ,k-1\}$ мы сможем подставить их в формулу и найти искомое решение:
 
@@ -146,10 +146,10 @@ x = x_0 + x_1 p_0 + x_2 p_0 p_1 + \cdots + x_{k-1} p_0 p_1 \cdots p_{k-2}
 * [26] Harvey L. Garner. 1959. The residue number system. In Papers Presented at the the March 3-5, 1959, Western Joint Computer Conference (IRE-AIEE-ACM ’59 (Western)). Association for Computing Machinery, New York, NY, USA, 146–153.
 https://doi.org/10.1145/1457838.1457864
 
-### Algorithm. Mixed Radix Conversion
+#### Algorithm 1. Mixed Radix Conversion
 
-*Requie:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ - набор из $n$ взаимно простых модулей.\
-*Requie:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
+*Require:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ - набор из $n$ взаимно простых модулей.\
+*Require:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
 Шаг 1  precompute $\gamma_k=(\prod_{i=0}^{k-1} p_i)^{-1}{\mod {p_{k}}}~$, for $k=1,2, ... , n-1$
 1. $\text{for } k \text{ from } 1 \text{ to } n-1$
 2. $\quad p ← p_0 \pmod{p_k}$
@@ -160,17 +160,61 @@ https://doi.org/10.1145/1457838.1457864
 Шаг 2: Расчет коэффициентов MRC $\{v_i\}$ из RNS $\{a_i\}$
 1. $v_0 ← a_0$
 2. $\text{for } k \text{ from } 1 \text{ to } n-1$
-3. $\quad t ← v_{k-1}$
+3. $\quad u ← v_{k-1}$
 4. $\quad \text{for } i \text{ from } k-2 \text{ to } 0$
-5. $\quad\quad t ← t\cdot p_i + v_i\pmod{p_k}$
-6. $\quad v_k = (a_k - t)\gamma_k \pmod{p_k}$
+5. $\quad\quad u ← (u\cdot p_i + v_i) \bmod{p_k}$
+6. $\quad v_k = (a_k - u)\cdot\gamma_k \pmod{p_k}$
 
 Шаг 3: Расчет стандартного представления числа из MRC
 1. $x ← v_{n-1}$
 2. $\text{for } k \text{ from } n-2 \text{ to } 0$
 3. $\quad x = x\cdot p_k + v_k$
 4. $\text{return }x$
+---
+Шаг 1 можно исключить, если хранить предварительно вычисленные константы $\{\gamma_i\}$. Шаг 2 и шаг 3 можно объединить, если предварительно вычислить позиционные значения $\lbrace\beta_k = \prod_{i=0}^{k-1} p_i\rbrace$.
 
+#### Algorithm 1.1 
+*Require:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ - набор из $n$ взаимно простых модулей.\
+*Require:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
+*Require:* precompute $\gamma_k=(\prod_{i=0}^{k-1} p_i)^{-1}{\mod {p_{k}}}~$, for $k=1,2, ... , n-1$\
+*Require:* precompute $\beta_k=(\prod_{i=0}^{k-1} p_i)~$, for $k=1,2, ... , n-1$
+1. $v_0 ← a_{0}, x ← a_{0}$
+2. $\text{for } k \text{ from } 1 \text{ to } n-1 :$
+3. $\quad u ← v_{k-1}$
+4. $\quad \text{for } i \text{ from } k-2 \text{ to } 0$
+5. $\quad\quad u ← (u\cdot p_i + v_i) \bmod{p_k}$
+6. $\quad v_k = (a_k - u)\cdot\gamma_k \pmod{p_k}$
+7. $\quad x ← x + v_k\cdot \beta_k$
+8. $\text{return } x$
+---
+
+#### Algorithm 2. CRT base extension
+
+*Require:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ -- набор из $n$ взаимно простых модулей, $q$-модуль взаимно простой к $\{p_i\}$.\
+*Require:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
+*Ensure:* $x_q \equiv x \pmod{q}$
+Шаг 1. Precompute $\xi_i=a_i\cdot \left(\prod_{i\neq j} [p_j]_{p_i}\right)^{-1}\pmod{p_i}~$, $e = \left\lfloor\sum_{i=0}^{n-1} {\xi_{i}}/{p_i}\right\rceil$
+1. $z ← 0$
+2. $\text{for } i=0 \text{ to } n-1 :$
+3. $\quad {r} ← 1$
+4. $\quad \text{for } j=0 \text{ to } n-1 :$
+5. $\quad \quad {r} ← {r} \cdot p_j \pmod{p_i} \text{ if } i\neq j$
+6. $\quad \tilde{p}_i ← {r}^{-1} \pmod{p_i}$
+7. $\quad \xi_i ← a_i\cdot \tilde{p}_i \pmod{p_i}$
+8. $\quad z ← z + \xi_i /\tilde{p}_i$
+9. $e ← \lfloor z \rceil$
+
+Шаг 2. Рассчитать $x \pmod{ q}~$, $P_q = \prod_i p_i \pmod{q}$
+1. $x ← 0, P_q ← 1$
+2. $\text{for } i=0 \text{ to } n-1 :$
+3. $\quad {r} ← 1$
+4. $\quad \text{for } j=0 \text{ to } n-1 :$
+5. $\quad \quad {r} ← {r} \cdot p_j \pmod{q} \text{ if } i\neq j$
+6. $\quad x ← x + \xi_i\cdot {r} \pmod{q}$
+7. $\quad P_q ← P_q\cdot p_i \pmod{q}$
+8. $x_q ← (x - e\cdot P_q) \bmod q$
+9. $\text{return } x_q$
+---
 
 Дополнительная литература
 
