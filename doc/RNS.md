@@ -12,7 +12,7 @@ _Анатолий М. Георгиевский_, 2025-09-19
 ```math
 z_i = x_i \circ y_i \mod p_i, \text{ где } \circ \in \{+, -, \times\}
 ```
-Традиционно рассматриваются системы $\{2^n+1, 2^n, 2^n-1\}$
+Традиционно рассматриваются системы взаимно простых чисел вида $\{2^n-2^s\pm1, 2^n, 2^n-1\}$, нас интересуют числа вида $2^{n} - A\cdot 2^{s} \pm 1$. 
 
 Ряд работ по использованию RNS в доказательствах ZKP и FHE:
 
@@ -20,6 +20,7 @@ z_i = x_i \circ y_i \mod p_i, \text{ где } \circ \in \{+, -, \times\}
 * [[2018/117](https://eprint.iacr.org/2018/117.pdf)] An Improved RNS Variant of the BFV Homomorphic Encryption Scheme
 * [[2018/931](https://eprint.iacr.org/2018/931.pdf)] A Full RNS Variant of Approximate Homomorphic Encryption
 
+Другое применение: Error Correction Codes в RNS
 
 **Обозначения**
 
@@ -146,7 +147,7 @@ x = x_0 + x_1 p_0 + x_2 p_0 p_1 + \cdots + x_{k-1} p_0 p_1 \cdots p_{k-2}
 * [26] Harvey L. Garner. 1959. The residue number system. In Papers Presented at the the March 3-5, 1959, Western Joint Computer Conference (IRE-AIEE-ACM ’59 (Western)). Association for Computing Machinery, New York, NY, USA, 146–153.
 https://doi.org/10.1145/1457838.1457864
 
-#### Algorithm 1. Mixed Radix Conversion
+### Algorithm 1. Mixed Radix Conversion
 
 *Require:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ - набор из $n$ взаимно простых модулей.\
 *Require:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
@@ -173,7 +174,7 @@ https://doi.org/10.1145/1457838.1457864
 ---
 Шаг 1 можно исключить, если хранить предварительно вычисленные константы $\{\gamma_i\}$. Шаг 2 и шаг 3 можно объединить, если предварительно вычислить позиционные значения $\lbrace\beta_k = \prod_{i=0}^{k-1} p_i\rbrace$.
 
-#### Algorithm 1.1 
+### Algorithm 1.1 
 *Require:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ - набор из $n$ взаимно простых модулей.\
 *Require:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
 *Require:* precompute $\gamma_k=(\prod_{i=0}^{k-1} p_i)^{-1}{\mod {p_{k}}}~$, for $k=1,2, ... , n-1$\
@@ -188,7 +189,7 @@ https://doi.org/10.1145/1457838.1457864
 8. $\text{return } x$
 ---
 
-#### Algorithm 2. CRT base extension
+### Algorithm 2. CRT base extension
 
 *Require:* $\mathcal{B} = \{p_0, \ldots, p_{n-1}\}$ -- набор из $n$ взаимно простых модулей, $q$-модуль взаимно простой к $\{p_i\}$.\
 *Require:* $a_i \equiv x \pmod{p_i}$ -- RNS представление $[a]_{\mathcal{B}}$\
@@ -219,9 +220,21 @@ https://doi.org/10.1145/1457838.1457864
 Дополнительная литература
 
 * [[22](https://doi.org/10.1137/1011027)] N.S. Szabo, R.I. Tanaka. Residue Arithmetic and Its Applications to Computer Technology
-* [[23](https://www.iacr.org/archive/eurocrypt2000/1807/18070529-new.pdf)] Kawamura, S., Koike, M., Sano, F., Shimbo, A. (2000). Cox-Rower Architecture for Fast Parallel Montgomery Multiplication. In: Preneel, B. (eds) Advances in Cryptology — EUROCRYPT 2000. EUROCRYPT 2000. Lecture Notes in Computer Science, vol 1807. Springer, Berlin, Heidelberg. 
+* [[23](https://www.iacr.org/archive/eurocrypt2000/1807/18070529-new.pdf)] Kawamura, S., Koike, M., Sano, F., Shimbo, A. (2000). Cox-Rower Architecture for Fast Parallel Montgomery Multiplication. In: Preneel, B. (eds) Advances in Cryptology — EUROCRYPT 2000. EUROCRYPT 2000. Lecture Notes in Computer Science, vol 1807. Springer, Berlin, Heidelberg.\
 (https://doi.org/10.1007/3-540-45539-6_37)
 * [[24](https://doi.org/10.1109/12.709376)] J. . -C. Bajard, L. . -S. Didier and P. Kornerup, "An RNS Montgomery modular multiplication algorithm," in IEEE Transactions on Computers, vol. 47, no. 7, pp. 766-776, July 1998, 
 (https://doi.org/10.1109/12.709376).
 * [[2025/1068](https://eprint.iacr.org/2025/1068.pdf)] Efficient Modular Multiplication Using Vector Instructions on Commodity Hardware, 2025. Cryptology {ePrint} Archive, Paper 2025/1068
-* [25] Kawamura, et al. Efficient Algorithms for Sign Detection in RNS Using Approximate Reciprocals, 2021
+* [10] A. Shenoy and R. Kumaresan, "Fast base extension using a redundant modulus in rns", IEEE Transactions on Computers, vol. 38, no. 2, pp. 292–297, 2002.
+(https://doi.org/10.1109/12.16508)
+* [11] J.-C. Bajard and T. Plantard, “Rns bases and conversions,” in Advanced Signal Processing Algorithms, Architectures, and Implementations XIV, vol. 5559. SPIE, 2004, pp. 60–69.
+* [12] S. Kawamura, M. Koike, F. Sano, and A. Shimbo, "Cox-rower architecture for fast parallel montgomery multiplication", in Advances in Cryptology—EUROCRYPT 2000: International Conference on the Theory and Application of Cryptographic Techniques Bruges, Belgium, May 14–18, 2000 Proceedings 19. Springer, 2000, pp. 523–538.
+
+
+* https://webusers.imj-prg.fr/~jean-claude.bajard/MesPublis/ARITH19.pdf
+
+Направление поиска: 
+* RRNS -- Redundant Residue Number System
+* RNS Montgomery multiplication
+* RNS modular multiplication
+
