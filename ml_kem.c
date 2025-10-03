@@ -79,6 +79,7 @@ s^T \circ A^T \circ A \circ s;
 */
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 // \see (shake256.c)
 typedef struct _XOF_ctx XOF_ctx_t;
 extern void shake128(uint8_t *data, size_t len, uint8_t *tag, int d);
@@ -114,6 +115,7 @@ extern void XOF_squeeze(XOF_ctx_t* ctx, uint8_t* data, size_t len);
 #define N_INV   3303// ≡ 128^{−1} mod Q
 #define Q_MONT  3327// -q^{-1} mod 2^{16} = 3327
 #define U_BARRETT 40317 // 2^{27}/Q_PRIME
+#define US_BARRETT 20159 // signed  Barrett constant for signed modular reduction
 #elif (Q_PRIME == 12289)
 #define ZETA    145  // корень из единицы N-й степени
 #define Q_MONT  53249
@@ -125,6 +127,7 @@ typedef  int16_t  int16x2_t __attribute__((vector_size(4)));
 typedef uint16_t uint16x8_t  __attribute__((vector_size(16)));
 typedef uint16_t uint16x16_t __attribute__((vector_size(32)));
 typedef uint16_t uint16x32_t __attribute__((vector_size(64)));
+typedef  int16_t  int16x32_t __attribute__((vector_size(64)));
 
 /*! Алгоритм заменяет целочисленное деление на модуль на умножение (mul_hi) и сдвиг. 
 
@@ -188,6 +191,36 @@ static inline uint16x32_t VMULM(uint16x32_t a, uint16x32_t b, uint16x32_t w, uin
     r = _mm512_min_epu16(r, _mm512_sub_epi16(r, (__m512i)p));
     return (uint16x32_t)r;
 }
+static inline uint16x32_t VMULM_signed(uint16x32_t a, uint16x32_t b, uint16x32_t w, uint16x32_t p){
+    __m512i q = _mm512_mulhi_epu16((__m512i)a, (__m512i)w);
+    __m512i r0= _mm512_mullo_epi16((__m512i)a, (__m512i)b);
+    __m512i r1= _mm512_mullo_epi16(q, (__m512i)p);
+    __m512i r = _mm512_sub_epi16(r0, r1);
+    return (uint16x32_t)r;//_mm512_min_epu16(r, _mm512_sub_epi16(r, (__m512i)q));
+}
+/*! \brief Signed Barrett reduction Ur = 40317, q = 3329 */
+static inline  uint16x32_t VMODB(uint16x32_t a, uint16x32_t u, uint16x32_t q){
+    __m512i t = _mm512_mulhi_epu16((__m512i)a,(__m512i)u);
+    t = _mm512_srli_epi16(t, 11);
+    t = _mm512_mullo_epi16(t, (__m512i)q);
+    __m512i r = _mm512_sub_epi16((__m512i)a, t);
+    return (uint16x32_t)_mm512_min_epu16(r, _mm512_sub_epi16(r, (__m512i)q));
+}
+/*! \brief Signed Barrett reduction Ur = 20159, q = 3329 */
+static inline  int16x32_t VMODB_signed(int16x32_t r, uint16x32_t u, uint16x32_t q){
+    __m512i t = _mm512_mulhi_epi16((__m512i)r,(__m512i)u);
+    t = _mm512_srai_epi16(t, 10);
+    t = _mm512_mullo_epi16(t, (__m512i)q);
+    return (int16x32_t)_mm512_sub_epi16((__m512i)r, t);
+}
+// Signed Montgomery multiplication with precomputed u = (q^{-1} mod 2^{16}) 
+// https://www.microsoft.com/en-us/research/wp-content/uploads/1996/01/j37acmon.pdf
+static inline  int16x32_t VMULM_mont(int16x32_t a, int16x32_t zl, int16x32_t zh, uint16x32_t q){
+    __m512i z1 = _mm512_mulhi_epi16((__m512i)a, (__m512i)zh);// zh = zeta
+    __m512i m  = _mm512_mullo_epi16((__m512i)a, (__m512i)zl);// zl = zeta * q^{-1}
+    __m512i t1 = _mm512_mulhi_epi16(m, (__m512i)q);
+    return (int16x32_t)_mm512_sub_epi16(z1, t1); // возможно ли исключить?
+}
 static inline uint16x32_t VMULM_barrett(uint16x32_t a, uint16x32_t b, uint16x32_t u, uint16x32_t q){
     __m512i z1 = _mm512_mulhi_epu16((__m512i)a, (__m512i)b);
     __m512i z0 = _mm512_mullo_epi16((__m512i)a, (__m512i)b);
@@ -236,7 +269,7 @@ static inline uint16x16_t VMULM_barrett(uint16x16_t a, uint16x16_t b, uint16x16_
     __m256i z1 = _mm256_mulhi_epu16((__m256i)a, (__m256i)b);
     __m256i z0 = _mm256_mullo_epi16((__m256i)a, (__m256i)b);
 //    __m256i Ur = _mm256_set1_epi16(U_BARRETT);
-#if defined(__AVX512_VBMI2__) && defined(__AVX512VL__)// AVX10.1
+#if (defined(__AVX512_VBMI2__) && defined(__AVX512VL__)) || defined(__AVX10_1__)// AVX10.1
     __m256i c1 = _mm256_shrdi_epi16(z0,z1, 11);
 #else 
     __m256i c1 = _mm256_or_si256(_mm256_srli_epi16(z0, 11), _mm256_slli_epi16(z1, 16-11));
@@ -288,6 +321,7 @@ static uint16x2_t VMULM(uint16x2_t a, uint16x2_t b, uint16x2_t w, uint16x2_t q){
 #endif
 #if VL==32
 #define uint16xVL_t uint16x32_t
+#define  int16xVL_t  int16x32_t
 #define VSET1(x) {x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x, x,x,x,x}
 static inline uint16x32_t VROTL(uint16x32_t a, uint16x32_t b){
     return __builtin_shufflevector(a,b, 63, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
@@ -664,16 +698,14 @@ const int L = Q+16;
     return c4;//((uint16_t)(c4-q)<(uint16_t)c4)? c4-q: c4;
 }
 /*! signed Montogomery multiplication with precomputed qm = -q^{-1} mod 2^{16} */
-static inline int16_t  mont_MULM(int16_t a, int16_t b, int16_t q, int16_t qm){
+static inline int16_t  mont_MULM(int16_t a, int16_t b, int16_t qm, int16_t q){
 
-    int32_t z = (a*(int32_t)b);// signed high 16 bit
-    int16_t z0=  a*(int32_t)b; // signed low 16 bit
-//    int32_t q = Q_PRIME;
-    int16_t p = qm; // mod_inverse(Q_PRIME); // 1/q mod 2^{32}
-    int16_t m = z0 * p; // low product z_0 (1/q)
-    z = (z + m*q)>>16; // high product
+    int16_t z1 = (a*(int32_t)b)>>16;// signed high 16 bit
+//    int16_t z0 =  a*(int32_t)b; // signed low 16 bit
+    int16_t m  = a*qm; // low product z_0 (1/q)
+    int16_t t1 = (m*(int32_t)q)>>16;// signed high 16 bit
+    int16_t z  = z1 - t1; // high product
     if (z<0) z+=q;
-    
     return  (int16_t)z;
 }
 static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w, uint16_t p){
@@ -682,6 +714,24 @@ static inline uint16_t shoup_MULM(uint16_t a, uint16_t b, uint16_t w, uint16_t p
     uint16_t r1=  q*p;
     uint16_t r = r0 - r1;
     return ((uint16_t)(r-p)<r)? r-p:r;
+}
+// Сдвиг на n - разрядов, заменяет деление на 2^n
+static inline int16_t SHRM(int16_t a, uint16_t p, int n){
+    int16_t r = a;
+    r = (r>>n) - (r & (0xFFFFu>>(16-n)))*((p-1)>>n);
+    return (r<0)? (r+p):r;
+}
+static inline void vec_shrm(uint16x2_t* r_, int n, unsigned int len){
+    int16xVL_t *r = (int16xVL_t*) r_;
+    int16xVL_t mask = (int16xVL_t)VSET1(0xFFFFu>>(16-n));
+    int16xVL_t a = (int16xVL_t)VSET1((Q_PRIME-1)>>n);
+    int16xVL_t p = (int16xVL_t)VSET1(Q_PRIME);
+    for(int i=0; i<len/VL; i++){
+        int16xVL_t v = r[i];
+        v = (v>>n) - (v & mask)*a;
+        r[i] = v + ((v<0)&p);
+        //r[i] = SHRM(r[i], Q_PRIME, n);
+    }
 }
 static inline void vec_mulm_u(uint16x2_t* r_, const uint16x2_t* a_, uint16_t b, unsigned int len){
     uint16xVL_t* r = (uint16xVL_t*)r_;
@@ -996,6 +1046,7 @@ uint16x2_t* iNTT(uint16x2_t *f){
         i--;
         NTT_GS_butterfly(f+off/2, len, z);
     }
+    //vec_shrm(f, 7, N);
     vec_mulm_u(f, f, N_INV, N);
     return f;
 }
@@ -1402,7 +1453,16 @@ static inline uint32_t INVM(uint32_t a, const uint32_t q){
     return POWM(a, q-2, q);
 }
 /*! \brief Функция для вычисления q^{-1} mod 2^{32} */
-uint32_t mod_inverse(uint32_t q) {
+static uint32_t mod_inv(uint32_t q, int n) {
+    uint32_t q_inv = 1;
+    for (int i = 1; i < n; i++) {
+        if (((q * q_inv) & ((~0uL)>>(31-i))) != 1) {
+            q_inv += (1u<<i);
+        }
+    }
+    return q_inv;
+}
+static uint32_t mod_inverse(uint32_t q) {
     uint32_t q_inv = 1;
     for (int i = 1; i < 16; i++) {
         if (((q * q_inv) & ((~0uL)>>(31-i))) != 1) {
@@ -1761,7 +1821,148 @@ if (1) {// проверка умножения полиномов
         printf("Montgomery OK\n");
     }
 #endif
-    if (1) {// проверка умножения методом Монтгомери
+    if (1) {// проверка редуцирования Баррета со знаком
+        uint16_t p = Q_PRIME;
+        uint16x32_t q  = VSET1(p);
+        uint16_t us = rint((float)(1u<<(16+10))/p);
+        uint16x32_t Us = VSET1(us);
+        printf("MOD Barrett q=%5d Us=%5d\n", q[0],Us[0]);
+        int count = 50;
+        for (int32_t i=(1u<<15)-1; i>-(1<<15); i--){
+             int16x32_t a = (int16x32_t)VSET1(i);
+             int16x32_t r = VMODB_signed(a,  Us, q);
+            int16_t s = (i)%p;
+            if (s<0) s+=p;
+            if (r[0] != s) {
+                 printf("fail signed %d (mod q) = %d!=%d\n",i, r[0], s);
+                 if(--count==0) break;
+            }
+        }
+        printf("Signed MOD OK\n");
+    }
+    if (0) {// проверка Шаупа со знаком
+        uint16_t p = Q_PRIME;
+        uint16x32_t q  = VSET1(p);
+        printf("Signed Shoup q=%5d\n", q[0]);
+        int count = 50;
+        for (int32_t j=p-1; j>0; j--){
+            uint16x32_t b = (uint16x32_t)VSET1(j);
+            uint16_t W = rint((float)((uint32_t)j<<16)/p);
+            //printf("b=%d W = %04x\n", j, W);
+            uint16x32_t w = (uint16x32_t)VSET1(W);
+            for (int32_t i=p-1; i>0; i--){
+                uint16x32_t a = (uint16x32_t)VSET1(i);
+                uint16x32_t r = VMULM_signed(a,  b, w, q);
+                int16_t s = (i*j)%p;
+                if (s<0) s+=p;
+                if (r[0] != s) {
+                    printf("fail shoup %d (mod q) = %d!=%d\n",i, r[0], s);
+                    if(--count==0) break;
+                }
+            }
+            if(count==0) break;
+        }
+        printf("Signed Shoup  OK\n");
+    }
+    if (0) {// проверка умножения методом signed МWC
+        uint32_t primes[] = {
+            (1u<<31) -(1u<<27)+1,
+            (1u<<31) -(1u<<25)+1,
+            (1u<<31) -(1u<<24)+1,
+            (1u<<31) -(1u<<19)+1,
+            (1u<<31) -(1u<<17)+1,            
+            (0x7bffu<<16) + 1, (0x7b27u<<16) + 1, (0x7a46u<<16) + 1, (0x79efu<<16) + 1,
+            0x7f000001, 0x7e100001, 0x7e000001, 0x7d200001, 0x7c800001, 0x7bd00001,
+        };
+int32_t mwc32s_hash(int32_t h, int16_t d, int32_t q, int32_t a){
+    h = h + d;
+    h = (h>>16) - (uint16_t)h*a;
+    return h;
+}
+        uint32_t mwc32s_hash_(uint32_t h, uint16_t d, int32_t q, uint32_t a){
+            h = h + d;
+            h = (h>>16) - (uint16_t)h*a;
+            return h;
+        }
+        for (int k=0; k< sizeof(primes)/sizeof(primes[0]); k++){
+            int32_t p = primes[k];
+            int32_t h = p-1;
+            int32_t A0 =(p+1)>>16;
+            printf("MWC32s q=%08x\n", p);
+            for (int i=0; i<p; i++) {
+                h = mwc32s_hash(h, (int16_t)(~i), p, A0);
+                if (h>=p || h<=-p) printf("$");
+                if (h<0) h+=p;
+                int32_t r = h;
+                int n = 3;
+                h = (h>>n) - (h & (~0uL>>(32-n)))*((p-1)>>n);
+                h = (h>>n) - (h & (~0uL>>(32-n)))*((p-1)>>n);
+                //h = (h>>16) - (uint16_t)h*A0;
+                if (h<0) h+=p;
+                h = ((int64_t)h<<(n+n))%p;
+                if (h != r) printf("@%d != %d\n", h, r%p);
+            }
+        }
+    }
+    if (1) {// проверка редукции методом МWC
+uint32_t primes[] = {
+    (0xFFEAu<<16) - 1, (0xFFD7u<<16) - 1, (0xFFBDu<<16) - 1, (0xFFA8u<<16) - 1,
+    (0xFF9Bu<<16) - 1, (0xFF81u<<16) - 1, (0xFF80u<<16) - 1, (0xFF7Bu<<16) - 1,
+    (0xFF75u<<16) - 1, (0xFF48u<<16) - 1, (0xFF3Fu<<16) - 1, (0xFF3Cu<<16) - 1,
+    (0xFF2Cu<<16) - 1, (0xFF09u<<16) - 1, (0xFF03u<<16) - 1, (0xFF00u<<16) - 1,
+    (0xFEEBu<<16) - 1, (0xFEE4u<<16) - 1, (0xFEA8u<<16) - 1, (0xFEA5u<<16) - 1,
+    (0xFEA0u<<16) - 1, (0xFE94u<<16) - 1, (0xFE8Bu<<16) - 1, (0xFE72u<<16) - 1,
+    (0xFE4Eu<<16) - 1, (0xFE30u<<16) - 1, (0xFE22u<<16) - 1, (0xFE15u<<16) - 1,
+    (0xFE04u<<16) - 1, (0xFE00u<<16) - 1, 
+};
+uint32_t mwc32_hash(uint64_t h, uint16_t d, uint32_t q, uint32_t a){
+    h = h + d;
+    h = (uint16_t)h*a + (h>>16);
+//    if (h>=q) h-=q;
+    return h;
+}
+        if (0) for (int k=0; k< sizeof(primes)/sizeof(primes[0]); k++){
+            uint32_t p = primes[k];
+            uint32_t h3 = p-1;
+            uint32_t A0 =(p+1)>>16;
+            printf("MWC32u q=%08x\n", p);
+            for (int i=0; i<p; i++) {
+                h3 = mwc32_hash(h3, (uint16_t)~i, p, A0);
+                if (h3>p) printf("$");
+            }
+        }
+        for (int k=0; k< sizeof(primes)/sizeof(primes[0]); k++){
+            uint32_t p = primes[k];
+            int s = 16;//__builtin_ctz(p+1);
+            uint32_t A = (p+1)>>s;
+            uint32_t A1 = (p+1)>>16;
+            uint32_t mask = (~0uL)>>(32-s);
+            printf("MWC q=%08x j=%d\n", p, jacobi((p+1)>>16,p-1));
+            if (0) for (uint64_t b=0; b<A; b++){
+                for (uint64_t a=0; a<A*3; a++){
+                    uint64_t c = a*(b<<21);// Montgomery-Friendly MWC modular multiplication
+                    c = (c & mask)*A + (c>>s);
+                    c = (c & mask)*A + (c>>s);
+                    if (c>=p) c-=p;
+                    if (c>=p) printf("$");
+                    uint32_t r2 = (a*(uint64_t)b)%p;
+                    if ((c<<11)%p!=r2) {
+                        printf("fail mwc mul %d * %d = %d != %d\n", a, b, c, r2);
+                        break;
+                    }
+                    r2 = c;
+                    int n = 3;
+                    c = (c & (~0uL>>(32-n)))*((p+1)>>n) + (c>>n);
+                    if ((c<<n)%p!=r2) {
+                        printf("fail mwc shl %d * %d = %d != %d\n", a, b, c, r2);
+                        break;
+                    }
+                }
+            }
+        }
+        // return 0;
+    }
+    if (0) {// проверка умножения методом Монтгомери
         uint16_t primes[] = {
             0x101, 0x301, 0xd01, 0x1e01, 0x1f01, 0x2501, 0x2a01, 0x2e01, 0x3001, 0x3401, 0x3701, 0x3901, 0x3c01, 0x4601, 0x4801, 
             0x4c01, 0x5701, 0x5a01, 0x5b01, 0x6401, 0x6601, 0x6901, 0x7901, 0x7b01, 0x7e01,
@@ -1769,20 +1970,22 @@ if (1) {// проверка умножения полиномов
         for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++){
             uint16_t p = primes[k];//Q_PRIME2;
 
-            uint16_t qm = -mod_inverse(p);
-            printf("Mont q=%5d qm=%5d\n", p, qm);
+            int16_t qm = mod_inverse(p);
+            printf("Mont q=%5d qm=%5d\n", (int)p, qm);
             int16_t r;
-            for (int16_t a=0; a<0x7FFF; a++){
-                for (int32_t b=0; b<=0x7FFF; b++){
-                    r = mont_MULM(a, b, p, qm);
-                    if (((int32_t)r<<16)%p != (a*(int32_t)b)%p) 
+            for (int32_t b=0; b<=p; b++){
+                int16_t zh = (b<<16)%p;
+                int16_t zl = zh*qm;
+                for (int32_t a=0; a<0x7FFF+1; a++){
+                    r = mont_MULM(a, zh, zl, p);
+                    if (((int32_t)r)%p != (a*(int32_t)b)%p) 
                         printf("fail mont mul %d * %d = %d != %d\n", a, b, r, (a*b)%p);
                 }
             }
         }
     }
     if (1) {// проверка умножения методом Shoup
-        printf("Shoup q=%d\n", Q_PRIME);
+        printf("Shoup q=%5d\n", Q_PRIME);
         for (uint32_t a=0; a<=0xFFFF; a++){
             for (uint16_t b=0; b<Q_PRIME; b++){
                 uint16_t w = shoup_div(b);//((uint32_t)b<<16)/Q_PRIME;
@@ -1793,7 +1996,7 @@ if (1) {// проверка умножения полиномов
             }
         }
     }
-    if (1) {// проверка умножения методом Shoup
+    if (0) {// проверка умножения методом Shoup
         uint16_t primes[] = {
             0x101, 0x301, 0xd01, 0x1e01, 0x1f01, 0x2501, 0x2a01, 0x2e01, 0x3001, 0x3401, 0x3701, 0x3901, 0x3c01, 0x4601, 0x4801, 
             0x4c01, 0x5701, 0x5a01, 0x5b01, 0x6401, 0x6601, 0x6901, 0x7901, 0x7b01, 0x7e01,
@@ -1825,7 +2028,36 @@ if (1) {// проверка умножения полиномов
             }            
         }
     }
+    if (1) {// проверка редукции NTT-friendly - работает!
+        uint16_t primes[] = {
+            0x101, 0x301, 0xd01, 0x1e01, 0x1f01, 0x2501, 0x2a01, 0x2e01, 0x3001, 0x3401, 0x3701, 0x3901, 0x3c01, 0x4601, 0x4801, 
+            0x4c01, 0x5701, 0x5a01, 0x5b01, 0x6401, 0x6601, 0x6901, 0x7901, 0x7b01, 0x7e01,
+        };
+        for (int k=0; k<sizeof(primes)/sizeof(primes[0]); k++){
+            int16_t p = primes[k];//Q_PRIME2;
+            int32_t s = 8;//__builtin_ctz(p-1);
+            int32_t m = 0xFFFFu>>s;
+            int16_t A0 = -(p>>s);
+            uint32_t pm = mod_inv(p, 32);
 
-
+            int c = 1;
+            int r = A0;
+            while(r!= 1) { r = A0*r%p; c++; }
+            int p2 = POWM(-A0, (p-1)/s/4, p);
+            printf("Proth q=%5d (0x%04x))qm=%08x %d ord %d/%d j=%d\n", p, p, pm, p*pm, c, (p-1)/s/2, jacobi(-A0,p-1));
+            for (int32_t a=0; a<p<<16; a++){
+                int32_t r = a;
+                r =((r&m)*A0)+(r>>s);
+                r =((r&m)*A0)+(r>>s);
+                //r =(r>>s) - (r&m)*A0;
+                if (r<0) r+=p;
+                
+                if (r<0 || r>=p || (r<<(s+s))%p != a%p) {
+                        printf("fail ntt-fr red %d != %d\n", a, r);
+                        break;
+                }
+            }
+        }
+    }
     return 0;
 }

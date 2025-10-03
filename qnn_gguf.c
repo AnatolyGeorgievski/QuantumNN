@@ -107,10 +107,11 @@ const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 	[GGML_TYPE_I2_S]    = "I2_S",
 	[GGML_TYPE_I8_S]    = "I8_S",
 	[GGML_TYPE_TL1]     = "TL1",
-	[GGML_TYPE_TL2]     = "TL2",
+//	[GGML_TYPE_TL2]     = "TL2",
 	[GGML_TYPE_I2_S]    = "I2_S",// BitNet
 	[GGML_TYPE_TQ1_0]	= "TQ1_0",
 	[GGML_TYPE_TQ2_0]	= "TQ2_0",
+	[GGML_TYPE_MXFP4]	= "MXFP4"
 	};
 	const size_t GGUF_TYPE_SIZE[GGUF_TYPE_COUNT] = {
 		[GGUF_TYPE_UINT8 ]  = sizeof(uint8_t),
@@ -599,7 +600,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
             return NULL;
         }
     }
-	fprintf(stdout, "info offset: %u kB\n", (offset/1024));
+	fprintf(stdout, "info offset: %lu kB\n", (offset/1024));
     // read the tensor infos
     if (ctx->header.n_tensors > 0) {
 		HTable_t* ht = _htable_new(ctx->header.n_tensors);
@@ -638,7 +639,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
             // make sure there is no duplicated tensor names
 			int32_t id = _htable_lookup_tensor_info(ht, &info->name, ctx->infos);
 			if (id>=0) {res = false; 
-				fprintf(stderr, "%s: tensor already exists #%d\n", __func__, i);
+				fprintf(stderr, "%s: tensor already exists #%ld\n", __func__, i);
 			}
 			_htable_insert_tensor_info(ht, &info->name);
 
@@ -650,7 +651,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
             }
 
             if (!res) {
-                fprintf(stderr, "%s: failed to read tensor info #%d\n", __func__, i);
+                fprintf(stderr, "%s: failed to read tensor info #%ld\n", __func__, i);
                 fclose(file);
                 gguf_free(ctx);
                 return NULL;
@@ -675,7 +676,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
 		//free(ht);
 		//_Exit(1);
     }
-fprintf(stdout, "data offset: %ld kB\n", (uint32_t)(ctx->offset/1024));
+fprintf(stdout, "data offset: %d kB\n", (uint32_t)(ctx->offset/1024));
 
     ctx->alignment = GGUF_DEFAULT_ALIGNMENT;
 
@@ -717,7 +718,7 @@ QTable_t* gguf_quarks(gguf_cxt_t* ctx) {
 void gguf_print_header(gguf_cxt_t* ctx){
 	for(uint64_t i=0; i<ctx->header.n_kv; ++i){
 		struct gguf_kv *kv = &ctx->kv[i];
-        fprintf(stdout, "%3d| %-36.*s|", i, kv->key.n, kv->key.data);
+        fprintf(stdout, "%3ld| %-36.*s|", i, (int)kv->key.n, kv->key.data);
 		switch(kv->type){
 		case GGUF_TYPE_BOOL:
 			fprintf(stdout, "%s\n", kv->value.bool_?"true":"false"); break;
@@ -725,20 +726,20 @@ void gguf_print_header(gguf_cxt_t* ctx){
 		case GGUF_TYPE_UINT16:
 		case GGUF_TYPE_UINT32:
 		case GGUF_TYPE_UINT64:
-			fprintf(stdout, "%llu\n", kv->value.uint64); break;
+			fprintf(stdout, "%lu\n", kv->value.uint64); break;
 		case GGUF_TYPE_INT8:
 		case GGUF_TYPE_INT16:
 		case GGUF_TYPE_INT32:
 		case GGUF_TYPE_INT64:
-			fprintf(stdout, "%lld\n", kv->value.int64); break;
+			fprintf(stdout, "%ld\n", kv->value.int64); break;
 		case GGUF_TYPE_STRING:
-			fprintf(stdout, "\"%-.*s\"\n", kv->value.str.n, kv->value.str.data); break;
+			fprintf(stdout, "\"%-.*s\"\n", (int)kv->value.str.n, kv->value.str.data); break;
 		case GGUF_TYPE_FLOAT32:
 			fprintf(stdout, "%f\n", kv->value.float32); break;
 		case GGUF_TYPE_FLOAT64:
 			fprintf(stdout, "%g\n", kv->value.float64); break;
 		case GGUF_TYPE_ARRAY: {
-			fprintf(stdout, "%d[",kv->value.arr.n);
+			fprintf(stdout, "%ld[",kv->value.arr.n);
 			switch (kv->value.arr.type){
 			case GGUF_TYPE_BOOL:
 				for (int k=0, offs=0;k< kv->value.arr.n && k<10; k++ )
@@ -774,12 +775,12 @@ void gguf_print_header(gguf_cxt_t* ctx){
 				break;
 			case GGUF_TYPE_UINT64:
 				for (int k=0, offs=0;k< kv->value.arr.n && k<10; k++ )
-					fprintf(stdout, " %lld", ((uint64_t *) kv->value.arr.data)[k]);
+					fprintf(stdout, " %ld", ((uint64_t *) kv->value.arr.data)[k]);
 				break;
 			case GGUF_TYPE_STRING:
 				for (int k=0, offs=0;k< kv->value.arr.n && k<10; k++ ){
 					struct gguf_str *str =&((struct gguf_str *) kv->value.arr.data)[k];
-					fprintf(stdout, " \"%-.*s\"", str->n, str->data);
+					fprintf(stdout, " \"%-.*s\"", (int)str->n, str->data);
 				}
 				break;
 			default: 
@@ -821,7 +822,7 @@ void gguf_vocab_token_types(gguf_cxt_t* ctx){
 			hist[tt]++;
 		if (tt==LLAMA_TOKEN_TYPE_CONTROL) {
 			struct gguf_str *str =&((struct gguf_str *) ts->value.arr.data)[i];
-			printf(" `%-.*s`", str->n, str->data);
+			printf(" `%-.*s`", (int)str->n, str->data);
 		}
 	}
 	printf("=== T.TYPE HYST [%d]===\n", n_tokens);
@@ -840,17 +841,17 @@ static int gguf_debug(gguf_cxt_t* ctx){
 			sprintf(buf, "%d", info->type);
 			type_name = buf;
 		}
-		fprintf(stdout, "| %-30.*s| %-6s| 0x%010llx ", info->name.n,info->name.data, (type_name!=NULL? type_name: "??"), info->offset);
+		fprintf(stdout, "| %-30.*s| %-6s| 0x%010lx ", (int)info->name.n,info->name.data, (type_name!=NULL? type_name: "??"), info->offset);
 		char ch='[';
 		int n_dims = info->ne[3]==1? info->ne[2]==1? info->ne[1]==1? 1: 2: 3: 4;
 		for (uint32_t j = 0; j < n_dims; ++j, ch=',') {
-			fprintf(stdout, "%c%d", ch, info->ne[j]);
+			fprintf(stdout, "%c%zd", ch, info->ne[j]);
 		}
 		fprintf(stdout, "]\n" ); 
 	}
 	// Статистика по типу квантизации и по 
 	fprintf(stdout, "num tensors: %ld\n", ctx->header.n_tensors);
-	fprintf(stdout, "data offset: %ld kB\n", (uint32_t)(ctx->offset/1024));
+	fprintf(stdout, "data offset: %d kB\n", (uint32_t)(ctx->offset/1024));
 }
 
 
@@ -877,7 +878,7 @@ int gguf_hash_load(gguf_cxt_t * ctx_gguf, char* data, size_t size)
 				if (y>=0) {
 					// ctx_gguf->infos[y].hash[0] = hash;// gguf_tensor_info
 					uint64_t sdnv = ctx_gguf->infos[y].sdnv;
-					printf("xxh64: %016llx #%04x :`%.*s`\n", hash, sdnv, len, name);	
+					printf("xxh64: %016lx #%04lx :`%.*s`\n", hash, sdnv, len, name);	
 				} else 
 					fprintf(stderr, "xxh64: `%.*s` not found\n", len, name);
 			}
@@ -1096,12 +1097,18 @@ static inline int32_t nearest_int(float fval) {
 * Формат f8_2 - кодирование v2f8[32] и e (E8M0) f8=E4M3FN ; ExpBias = 7 - замена для f16 и bf16
 * Формат bf8  - применяется для градиентов (не использует INF), использует насыщение (clamp)
 
+
+	\todo переименовать в Microscale (MXINT8) и MXFP8
+	\todo ввести метод QSNR для характеризации квантового шума
+
+
 * <https://onnx.ai/onnx/technical/float8.html> 
 
 Эффективно операции u8 i8 fp8 bf8 предполагают использование матричного умножения WMMA и векторных операций с упакованными типами DOT, конвертацию CVT.
 в системе команд RDNA4 и CDNA3. У Intel присутствуют в системе команд PVC (Xe-HPC). 
 */
-/* Метод квантизации по блоку 32 элемента i8[32] и масштабный множитель (E8M0) */
+/* Метод квантизации по блоку 32 элемента i8[32] и масштабный множитель (E8M0) 
+ */
 void    quantize_row_q8_K(const float * restrict x, block_q8_K * restrict y, int64_t k) {
     assert(k % Q8K_K == 0);
     const int nb = k / Q8K_K;
@@ -1271,12 +1278,23 @@ void print_tile_i8(int8_t*ds, unsigned ib, unsigned jb, unsigned lda){
 	}
 }
 
-void  dequantize_row_q8_K(const block_q8_K * restrict x, float * restrict y, int64_t k) {
-    assert(k % Q8K_K == 0);
-    const int nb = k / Q8K_K;
+void  dequantize_row_q8_K(const block_q8_K * restrict x, float * restrict y, int64_t n) {
+    assert(n % Q8K_K == 0);
+    const int nb = n / Q8K_K;
     for (int i = 0; i < nb; i++)
         for (int j = 0; j < Q8K_K; ++j)
             *y++ = x[i].d *x[i].qs[j];
+}
+void  dequantize_row_q2_0(const block_q2_0 * restrict x, float * restrict y, int64_t n) {
+    assert(n % QK2_0 == 0);
+    const int nb = n / QK2_0;
+    for (int i = 0; i < nb; i++){// по числу блоков	
+		for (int l = 0; l < 4; l++)
+			for (int j = 0; j < QK2_0/4; ++j) {// -1, 0, 1 <= 0, 1, 2 
+				// Intel DPAS: Signed 2-bits     | [-2, 1]     |  0x04  | s2
+				*y++ = x[i].d *(((x[i].qs[j] >> (l*2)) & 3u) - 1u);
+			}
+	}
 }
 /*! 
 	\todo оптимизацию под AVX512_BF16 и простой вариант под AVX512F
@@ -1662,8 +1680,10 @@ int main (int argc, char *argv[]){
 	char *path = argv[1];
 	gguf_cxt_t *ctx = gguf_init_from_file(path, 0);
 
-	gguf_vocab_token_types(ctx); // статистика токенов
-	if (options.verbose) gguf_debug(ctx);
+	if (0) gguf_vocab_token_types(ctx); // статистика токенов
+	printf("Tensors ...\n", options.name);
+	if (1) // options.verbose) 
+		gguf_debug(ctx);
 	// найти матрицу и показать
 	if (options.name!=NULL && options.output_file!=NULL && g_str_has_suffix(options.output_file, ".png")) {
 		struct gguf_tensor_info * info = NULL;

@@ -76,32 +76,31 @@ https://eprint.iacr.org/2012/470.pdf
  */
 static inline uint64_t INVL(uint32_t v) {
     int n = 0;//__builtin_clz(v);
-    return ((unsigned __int64)(-v)<<32)/v;
+    return ((uint64_t)(-v)<<32)/v;
 }
 
 #ifdef __AVX512F__
 #define VL 16
 typedef uint32_t uint32x16_t __attribute__((__vector_size__(64)));
-// модуль q
+// коррекция по модулю q
 static inline __m512i _mod1(__m512i x, __m512i q){
     return _mm512_min_epu32(x, _mm512_sub_epi32(x, q));
 }
-
 static inline __m512i _addm(__m512i a, __m512i b, __m512i q){
     __m512i d = _mm512_add_epi32(a, b);
 // если переполнение
     d = _mm512_mask_sub_epi32(d, _mm512_cmplt_epu32_mask(d,b), d, q);
-    //return d;
-    __m512i t = _mm512_sub_epi32(d, q);
-    return _mm512_min_epu32(d, t);
+    return d;
+//    __m512i t = _mm512_sub_epi32(d, q);
+//    return _mm512_min_epu32(d, t);
 //    return _mod1(_mm512_add_epi32(a, b), q);
 }
 static inline __m512i _subm(__m512i a, __m512i b, __m512i q){
     __m512i d = _mm512_sub_epi32(a, b);
     d = _mm512_mask_add_epi32(d, _mm512_cmplt_epu32_mask(a,b), d, q);
     return d;
-    __m512i t = _mm512_add_epi32(d, q);
-    return _mm512_min_epu32(d, t);
+//    __m512i t = _mm512_add_epi32(d, q);
+//    return _mm512_min_epu32(d, t);
 }
 static inline __m512i _mulhi(__m512i a, __m512i b, __m512i q){
     __m512i d0 = _mm512_mul_epu32(a, b);
@@ -130,12 +129,12 @@ $u = \lfloor (2^{64}-q)/q \rfloor$ подобрали выражение в та
 
  */
 static inline __m512i _barret(__m512i d, __m512i q, __m512i u){
-    __m512i c1, c2, c3, c4;
+    __m512i c1, c2, c3, r;
     c1 = _mm512_srli_epi64(d, 32);
     c2 = _mm512_add_epi64 (d, _mm512_mul_epu32(c1, u));
     c3 = _mm512_srli_epi64(c2, 32);
-    c4 = _mm512_sub_epi64 (d, _mm512_mul_epu32(c3, q));
-    return _mm512_min_epu64(c4, _mm512_sub_epi64(c4, q));
+    r  = _mm512_sub_epi64 (d, _mm512_mul_epu32(c3, q));
+    return _mm512_min_epu64(r, _mm512_sub_epi64(r, q));
 }
 static inline __m512i _shoup(__m512i a, __m512i  b, __m512i w, __m512i q){
     __m512i r,p;
@@ -380,9 +379,18 @@ static inline __m256i _barret_avx2(__m256i d, __m256i q, __m256i u) {
     __m256i c2 = _mm256_add_epi64(d, _mm256_mul_epu32(c1, u));
     __m256i c3 = _mm256_srli_epi64(c2, 32);
     __m256i c4 = _mm256_sub_epi64(d, _mm256_mul_epu32(c3, q));
+    return _mm256_min_epu32(c4, _mm256_sub_epi32(c4, q));
+/*
     __m256i c4_minus_q = _mm256_sub_epi64(c4, q);       // Compare c4 < c4_minus_q (unsigned comparison)
     __m256i cmp = _mm256_cmpgt_epi64(c4_minus_q, c4);   // c4_minus_q > c4
     return _mm256_blendv_epi8(c4_minus_q, c4, cmp);     // Select: if c4 < c4_minus_q, take c4; else take c4_minus_q
+    */
+}
+static inline __m256i _shoup_avx2(__m256i a, __m256i  b, __m256i w, __m256i q){
+    __m256i r,p;
+    p = _mm256_srli_epi64(_mm256_mul_epu32(a, w),32);
+    r = _mm256_sub_epi64(_mm256_mul_epu32(a, b), _mm256_mul_epu32(q, p));
+    return _mm256_min_epu64(r, _mm256_sub_epi64(r, q));
 }
 /*! \brief signed montgomery reduction
     \param d input value (uint64_t)
@@ -400,20 +408,48 @@ static inline __m256i _montgomery_avx2(__m256i d, __m256i q, __m256i qm) {
 
 static inline __m256i _addm_avx2(__m256i a, __m256i b, __m256i q) {
     __m256i d = _mm256_add_epi32(a, b);
-    __m256i t = _mm256_sub_epi32(d, q);
-    return _mm256_min_epu32(d, t);
+    // if overflow
+#if (defined(__AVX512F__) && defined(__AVX512VL__)) || defined(__AVX10_1__)
+    d = _mm256_mask_sub_epi32(d, _mm256_cmplt_epu32_mask(d,b), d, q);
+    return d;
+#else
+//    __m256i d_minus_q = _mm256_sub_epi64(d, q);       // Compare c4 < c4_minus_q (unsigned comparison)
+//    __m256i cmp = _mm256_cmplt_epu32(d, b);   // c4_minus_q > c4
+//    d = _mm256_blendv_epi8(d, d_minus_q, cmp);     // Select: if c4 < c4_minus_q, take c4; else take c4_minus_q
+
+    return _mm256_min_epu32(d, _mm256_sub_epi32(d, q));
+#endif
 }
 static inline __m256i _subm_avx2(__m256i a, __m256i b, __m256i q) {
     __m256i d = _mm256_sub_epi32(a, b);
+#if (defined(__AVX512F__) && defined(__AVX512VL__)) || defined(__AVX10_1__) 
+    d = _mm256_mask_add_epi32(d, _mm256_cmplt_epu32_mask(a,b), d, q);
+    return d;
+#else
     __m256i t = _mm256_add_epi32(d, q);
     return _mm256_min_epu32(d, t);
+#endif
 }
 static inline __m256i _mulm_avx2(__m256i a, __m256i b, __m256i q, __m256i u){
     __m256i d0 = _mm256_mul_epu32(a, b);
     __m256i d1 = _mm256_mul_epu32(_mm256_srli_epi64(a, 32), _mm256_srli_epi64(b,32));
     d0 = _barret_avx2(d0, q, u);
     d1 = _barret_avx2(d1, q, u);
-    return _mm256_blend_epi32 (d0, _mm256_slli_epi64(d1,32), 0xaa);
+    return _mm256_blend_epi32(d0, _mm256_slli_epi64(d1,32), 0xaa);
+}
+static inline __m256i _mulm_shoup_avx2(__m256i a, __m256i b, __m256i w, __m256i q){
+    __m256i d0 =  _shoup_avx2(a, b, w, q);
+    __m256i d1 =  _shoup_avx2(_mm256_srli_epi64(a,32), b, w, q);
+    return _mm256_blend_epi32(d0, _mm256_slli_epi64(d1,32), 0xaa);
+}
+static inline 
+void poly_mod1(uint32_t *r, const unsigned int N, const uint32_t p) {
+    __m256i q = _mm256_set1_epi32(p);
+    for (int i = 0; i < N; i += 16) {
+        __m256i v = _mm256_loadu_si256((__m256i *)(r + i));
+        __m256i vr = _mod1_avx2(v, q);
+        _mm256_storeu_si256((__m256i *)(r + i), vr);
+    }
 }
 /*! \brief Element-wise polynomial multiplication modulo q.
     \param r Output polynomial (array of N coefficients).
@@ -526,25 +562,25 @@ static inline void poly_subm(uint32_t *result, const uint32_t *a, const uint32_t
     \{
  */
 static inline uint32_t MULM(uint32_t a, uint32_t b, uint32_t q) {
-    return ((unsigned __int64)a*b)%q;
+    return ((uint64_t)a*b)%q;
 }
 static inline uint32_t ADDM(uint32_t a, uint32_t b, uint32_t q) {
-    return ((unsigned __int64)a + b)%q;
+    return ((uint64_t)a + b)%q;
 }
 static inline uint32_t SUBM(uint32_t a, uint32_t b, uint32_t q) {
-    return ((unsigned __int64)a + q - b)%q;
+    return ((uint64_t)a + q - b)%q;
 }
 static inline uint32_t SQRM(uint32_t a, uint32_t q) {
-    return ((unsigned __int64)a*a)%q;
+    return ((uint64_t)a*a)%q;
 }
 static inline uint32_t MOD(uint64_t a, uint32_t q) {
     return a%q;
 }
 static inline uint32_t SLM(uint32_t a, uint32_t q) {
-    return ((unsigned __int64)a<<1)%q;
+    return ((uint64_t)a<<1)%q;
 }
 static inline uint32_t SRM(uint32_t a, uint32_t q) {
-    return (a&1)? (a+(unsigned __int64)q)>>1: (a>>1);
+    return (a&1)? (a+(uint64_t)q)>>1: (a>>1);
 }
 /*! Редуцирование по модулю простого числа, с использованием Барретта */
 static inline uint32_t MODB(uint64_t a, uint32_t q, uint64_t U) {
@@ -772,7 +808,7 @@ uint32_t* invNTT(uint32_t *a, const uint32_t *gamma, unsigned int N, uint32_t q)
     }
     uint32_t N_inv = INVM(N, q);
     poly_mulm_u(a, a, N_inv, N, q);
-    poly_mod1(a, N, q);
+    //poly_mod1(a, N, q);
     return a;
 }
 /*! \brief Чисто-теоретическое преобразование на кольце $\mathbb{Z}_q/\langle x^N + 1\rangle$ 
@@ -973,14 +1009,14 @@ void poly_mul(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned int N,
 {
     uint32_t v[N];
     poly_mulm_u(r, a, b[N-1], N, q);
-    poly_mod1(r, N, q);
+    //poly_mod1(r, N, q);
     for (int i = N-2; i>=0; i--){
         //poly_xtime_madd(r, a, b[i], N, q);
         //vec_xtime_madd_shoup(r, a, b[i], N, q);
         poly_mulm_u(v, a, b[i], N, q);
         vec_xtime_addm(r, v, N, q);
     }
-    poly_mod1(r, N, q);
+    //poly_mod1(r, N, q);
 }
 static
 void NTT_CT_butterfly(uint32_t *a, uint32_t *b, uint32_t g, unsigned int n, uint32_t q) {
@@ -1166,14 +1202,35 @@ static uint64_t POWM128(const uint64_t b, uint64_t a, const uint64_t P)
 	}
 	return s;
 }
+
+
+#if defined(TEST_NTT) || 0
 /// Reference implementation
 #define A0  0xFEA0u// 0xFF80u
 #define Q0  ((A0<<16)-1)
 /*! функция хеширования эквивалентна FOLD(K=A), q=(A<<16)-1
  */
-uint32_t mwc32_hash(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
-    h = (0xFFFF&h)*a + (h>>16) + d;// rotl(h, 16) - (0x10000 - a)*(uint16_t)h
-    if (h>= q) h-=q;
+uint32_t mwc32_hash(uint32_t h, uint16_t d, uint32_t a){
+    h+= d;
+    h = (0xFFFF&h)*a + (h>>16);// rotl(h, 16) - (0x10000 - a)*(uint16_t)h
+    return h;
+}
+uint64_t mwc64_seed(uint64_t h, const uint32_t a){
+    const q = ((uint64_t)a<<32) -1;
+    if (h>=q) h-= q;
+    return h;
+}
+uint64_t mwc64_next(uint64_t h, const uint32_t a){
+    h = (0xFFFFFFFFu&h)*a + (h>>32);
+    return h;
+}
+int64_t mwc64s_next(int64_t h, const int32_t a){
+    h = (h>>32) - (0xFFFFFFFFu&h)*a;
+    return h;
+}
+uint64_t mwc64_hash(uint64_t h, uint32_t d, const uint32_t a){
+    h+= d;
+    h = (0xFFFFFFFFu&h)*a + (h>>32);
     return h;
 }
 uint32_t mwc32_next(uint32_t h, const uint32_t A){
@@ -1181,18 +1238,23 @@ uint32_t mwc32_next(uint32_t h, const uint32_t A){
     return h;
 }
 int32_t mwc32s_next(int32_t h, const int16_t A){
+    h = (h>>16) - (h&0xFFFFu)*A;
+    return h;
+}
+int32_t mwc32s_hash(int32_t h, int16_t d, const int16_t A){
+    h-= d;
     h = (h&0xFFFFu)*A - (h>>16);
     return h;
 }
-uint32_t mwc32u_next(uint32_t h, const uint32_t A){
-    uint32_t r = (h&0xFFFFu)*A - (h>>16);
-    if (r > (A<<16)) r+= (A<<16)+1;
-    return r;
-}
-#if defined(TEST_NTT) || 1
-
 uint32_t mwc32_hash_16(uint32_t h, uint16_t d, uint32_t q, uint32_t a){
     h += d;
+    h = (0xFFFF&h)*a + (h>>16);
+//    if (h>= q) h-=q;
+    return h;
+}
+uint32_t mwc32_hash_32(uint32_t h0, uint16_t d, uint32_t q, uint32_t a){
+    uint64_t h = h0;
+    h = (h<<16) + d;
     h = (0xFFFF&h)*a + (h>>16);
 //    if (h>= q) h-=q;
     return h;
@@ -1890,7 +1952,7 @@ int main(int argc, char **argv){
             printf("%llx: %08x != %08x\n", i, MODB(i<<n, Q0, U0), MOD(i<<n, Q0));
             break;
         }
-#if __AVX512F__
+#if defined(__AVX512F__)
         if (1) {// проверка векторной реализации
             __m512i U = _mm512_set1_epi64(U0);   // barrett constant
             __m512i q = _mm512_set1_epi64(Q0);   // prime
@@ -1906,7 +1968,7 @@ int main(int argc, char **argv){
                 break;
             }
         }
-#elif __AVX2__
+#elif defined(__AVX2__)
         if (1) {// проверка векторной реализации
             printf("AVX2: Barret reduction\n");
             __m256i U = _mm256_set1_epi64x(U0);   // barrett constant
@@ -1949,8 +2011,9 @@ int main(int argc, char **argv){
                 //break;
             }
         }
-        h1 = mwc32_hash(h1, (uint16_t)i, Q0, A0);
-        h3 = mwc32_hash_16(h3, (uint16_t)~i, Q0, A0);
+        h1 = mwc32_hash(h1, (uint16_t)i, A0);
+        //h3 = mwc32_hash_16(h3, (uint16_t)~i, Q0, A0);
+        h3 = mwc32_hash_32(h3, (uint16_t)~i, Q0, A0);
         h2 = FOLD(h2, (uint16_t)i, Q0, U0, A0);
         if (h3 >= Q0) {
             printf("MWC_%llx: %08x >= q\n", i, h3);

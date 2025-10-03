@@ -15,6 +15,7 @@ $ gcc -o test.exe json.c base64.c -lws2_32 `pkg-config --libs --cflags glib-2.0`
  */
 #include "json.h"
 #include <string.h>
+#include <inttypes.h>
 #include <stdlib.h>
 
 /*!
@@ -291,7 +292,7 @@ void json_to_string(JsonNode* js, GString* str, int offset)
         g_string_append(str, js->value.b!=0?"true":"false");
         break;
     case JSON_INT:
-        g_string_append_printf(str, "%lld", js->value.i);
+        g_string_append_printf(str, "%"PRId64, js->value.i);
         break;
     case JSON_FLOAT:
         g_string_append_printf(str, "%g", js->value.f);

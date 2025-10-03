@@ -3,6 +3,7 @@ qnn_protobuf.c
 
  */
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 #include "qnn_protobuf.h"
@@ -78,9 +79,9 @@ GSList * qnn_proto_decode( uint8_t *buf, size_t size, uint8_t ** tail,
             node->value.u = v;
             if (m->type == _ENUM){
                 const message_t * ref = qnn_proto_oneof(m->ref, v);
-                printf("%*d:var %lld '%s': %s\n", offs, node->id, node->value.u, name, ref->name);
+                printf("%*d:var %"PRIu64" '%s': %s\n", offs, node->id, node->value.u, name, ref->name);
             } else
-                printf("%*d:var %lld '%s'\n", offs, node->id, node->value.u, name);
+                printf("%*d:var %"PRIu64" '%s'\n", offs, node->id, node->value.u, name);
             break;
         case PROTO_WIRE_TYPE_LEN: 
             buf = proto_varint(buf, &len);
@@ -100,7 +101,7 @@ GSList * qnn_proto_decode( uint8_t *buf, size_t size, uint8_t ** tail,
                 uint8_t *buf2 = proto_varint(buf, &choice_tag);
                 buf2 = proto_varint(buf2, &len2);
                 const message_t * ref = qnn_proto_oneof(m->ref, PROTO_FIELD_NUMBER(choice_tag));
-                printf(" choice:%d'%s'\n", choice_tag, (ref!=NULL && ref->name)?ref->name : "");
+                printf(" choice:%"PRIu64"'%s'\n", choice_tag, (ref!=NULL && ref->name)?ref->name : "");
                 node->value.list = qnn_proto_decode(buf2, len2, tail, ref->ref, level+1);
                 buf2+=len2;
             } else
@@ -116,12 +117,12 @@ GSList * qnn_proto_decode( uint8_t *buf, size_t size, uint8_t ** tail,
         case PROTO_WIRE_TYPE_I32:
             node->type = PB_UINT;
             node->value.u = *(uint32_t*)buf; buf+=4;
-            printf("..%d:i32 %lld\n", node->id, node->value.u);
+            printf("..%d:i32 %"PRIu64"\n", node->id, node->value.u);
             break;
         case PROTO_WIRE_TYPE_I64:
             node->type = PB_UINT;
             node->value.u = *(uint64_t*)buf; buf+=8;
-            printf("..%d:i64 %lld\n", node->id, node->value.u);
+            printf("..%d:i64 %"PRIu64"\n", node->id, node->value.u);
             break;
         case PROTO_WIRE_TYPE_SGROUP:// deprecated
             node->type = PB_OBJECT;
@@ -510,9 +511,9 @@ void qnn_proto_print(GSList* list){
     while (list){
         Protobuf_t* pb = (Protobuf_t*) list->data;
         switch (pb->type){
-        case PB_INT:  printf("int %lld\n", pb->value.i);
+        case PB_INT:  printf("int %"PRId64"\n", pb->value.i);
             break;
-        case PB_UINT: printf("%d:uint %llu\n", pb->id, pb->value.u);
+        case PB_UINT: printf("%d:uint %"PRIu64"\n", pb->id, pb->value.u);
             break;
         case PB_STRING: 
             
