@@ -1181,8 +1181,8 @@ $\tilde{x} \in \mathbb{B}:\{-1,1\}$ для бинарной квантизаци
 c = \sum_{i=0}^{n-1}(a_i b_i)^{+} - \sum_{i=0}^{n-1}(a_i b_i)^{-}
 ```
 
+Требует определения векторных операций над квантизованными данными с использованием побитовых операций AND, XOR и POPCNT.
 
-Требует определения векторных операций над квантизованными данными с использованием побитовых операций AND, OR и POPCNT.
 * [[US2024/0054180A1](https://patents.google.com/patent/US20240054180A1/en)] Fast matrix multiplication for binary and ternary convolutional neural networks on arm central processing unit
 
 Матричное умножение с учетом квантизации запишется:
