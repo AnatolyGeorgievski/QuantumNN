@@ -202,7 +202,7 @@ kernel void kernel_sigma(global float* data) {
 static inline float _matrix_mad_f16_f16_k32( int v, int8 b, float acc )
 {
 )+"#if defined(cl_intel_subgroup_matrix_multiply_accumulate)"+R(
-#if 0//
+#if 1//
 	acc = intel_sub_group_f16_f16_matrix_mad_k16(as_short2(v).x,b,acc);
 	acc = intel_sub_group_f16_f16_matrix_mad_k16(as_short2(v).y,b,acc);
 	return acc;
