@@ -89,11 +89,11 @@ kernel void kernel_int(global float* data) {
 	data[get_global_id(0)] = as_float(y);
 }
 kernel void kernel_mad(global float* data) {
-	uint x = get_global_id(0);
-	uint y = get_local_id(0);
+	uint x = ~get_global_id(0);
+	uint y = ~get_local_id(0);
 	for(uint i=0u; i<512u; i++) {
-		x = mad(y,x,y); // 2 operations
-		y = mad(x,y,x); // 2 operations
+		x = mad_hi(y,x,y); // 2 operations
+		y = mad_hi(x,y,x); // 2 operations
 	}
 	data[get_global_id(0)] = as_float(y);
 }
