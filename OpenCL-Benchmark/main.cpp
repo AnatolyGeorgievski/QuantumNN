@@ -135,7 +135,7 @@ void benchmark_device(const Device_Info& device_info) {
 		kernel_sum.run();
 		time_sum = fmin(clock.stop(), time_sum);
 	}
-	float flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
+	flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
 	println("\r| SUM   compute "+alignr(45u, to_string(flops_sum, 3u))+"  TBOPs/s "+fraction(100.0f*flops_sum/device.info.tflops)+" |");
 	time_sum=max_double;
 	print("| Benchmarking ...                                                            |");
