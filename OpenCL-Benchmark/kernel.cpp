@@ -24,8 +24,13 @@ kernel void kernel_double(global float* data) {
 	double x = (double)get_global_id(0);
 	double y = (double)get_local_id(0);
 	for(uint i=0u; i<128u; i++) {
+#if defined(FP_FAST_FMAF)
 		x = fma(y, x, y); // 2 operations
 		y = fma(x, y, x); // 2 operations
+#else
+		x = y*x+y; // 2 operations
+		y = x*y+x; // 2 operations
+#endif
 	}
 	data[get_global_id(0)] = (float)y;
 }
@@ -35,8 +40,13 @@ kernel void kernel_float(global float* data) {
 	float x = (float)get_global_id(0);
 	float y = (float)get_local_id(0);
 	for(uint i=0u; i<512u; i++) {
+#if defined(FP_FAST_FMAF)
 		x = fma(y, x, y); // 2 operations
 		y = fma(x, y, x); // 2 operations
+#else
+		x = y*x+y; // 2 operations
+		y = x*y+x; // 2 operations
+#endif
 	}
 	data[get_global_id(0)] = y;
 }
@@ -47,8 +57,13 @@ kernel void kernel_half(global float* data) {
 	half2 y = (half2)((float)get_local_id(0), (float)get_global_id(0));
 	float z = 0;//
 	for(uint i=0u; i<512u; i++) {
+#if defined(FP_FAST_FMA_HALF)
+		x = fma(y,x, y);
+		y = fma(x,y, x);
+#else
 		x = y*x+y; // 4 operations
 		y = x*y+x; // 4 operations
+#endif
 	}
 	data[get_global_id(0)] = (float)y.x+(float)y.y;
 }
