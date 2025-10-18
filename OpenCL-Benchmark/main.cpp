@@ -119,10 +119,10 @@ void benchmark_device(const Device_Info& device_info) {
 //  George 2024-2025
 	time_sum=max_double;
 	print("| Benchmarking ...                                                            |");
-	Kernel kernel_sum(device, N, "kernel_mad", buffer);
+	Kernel kernel_mad(device, N, "kernel_mad", buffer);
 	for(uint i=0u; i<N_kernel; i++) {
 		clock.start();
-		kernel_sum.run();
+		kernel_mad.run();
 		time_sum = fmin(clock.stop(), time_sum);
 	}
 	float flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
