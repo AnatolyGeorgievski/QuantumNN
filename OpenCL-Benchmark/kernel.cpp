@@ -24,7 +24,7 @@ kernel void kernel_double(global float* data) {
 	double x = (double)get_global_id(0);
 	double y = (double)get_local_id(0);
 	for(uint i=0u; i<128u; i++) {
-#if defined(FP_FAST_FMAF)
+#if defined(FP_FAST_FMA)
 		x = fma(y, x, y); // 2 operations
 		y = fma(x, y, x); // 2 operations
 #else
