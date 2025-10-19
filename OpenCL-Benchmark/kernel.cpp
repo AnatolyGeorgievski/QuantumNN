@@ -143,7 +143,7 @@ kernel void kernel_shoup_uint(global float* data) {
 		data[get_sub_group_id()] = as_float(s1);
 	}
 }
-kernel void kernel_tnn_uint(global float* data) {
+kernel void kernel_tnn_uint_(global float* data) {
 	int ix = get_sub_group_local_id();
 	ushort2 x = as_ushort2(data[ix+get_sub_group_id()*get_max_sub_group_size()]);
 	ushort2 d = 0;
@@ -152,6 +152,24 @@ kernel void kernel_tnn_uint(global float* data) {
 		ushort2 y = as_ushort2(v);
 		ushort2 r0 = x&y;
 		ushort2 r1 = x&y.s10;
+		x = r1;
+		d += popcount(r0);
+		d -= popcount(r1);
+	}
+	data[get_global_id(0)] = d.x+d.y;
+//	uint s = sub_group_reduce_add(d.x+d.y);
+//	if (ix==0) 
+//		data[get_sub_group_id()] = as_float(s);
+}
+kernel void kernel_tnn_uint(global uint2* data) {
+	int ix = get_sub_group_local_id();
+	uint2 x = as_uint2(data[ix+get_sub_group_id()*get_max_sub_group_size()]);
+	uint2 d = 0;
+	uint2 v = data[ix];
+	for(uint i=0u; i<512u; i++) {
+		uint2 y = as_uint2(v);
+		uint2 r0 = x&y;
+		uint2 r1 = x&y.s10;
 		x = r1;
 		d += popcount(r0);
 		d -= popcount(r1);
