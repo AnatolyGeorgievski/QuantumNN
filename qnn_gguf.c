@@ -2,6 +2,7 @@
 
 Сборка 
 	$ gcc -DTEST_GGUF -O3 -march=native -o test qnn_gguf.c qnn_png.c xxh64.c quarks.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
+	$ gcc -DTEST_GGUF -O3 -march=native -o test qnn_gguf.c qnn_png.c xxh64.c sha256_ni.c shake256.c quarks.c hmac.c `pkgconf --cflags --libs glib-2.0` -lz -lpng
 	
 Тестирование
 	$ ./test.exe ../../llama.cpp/models/Rombos-Coder-V2.5-Qwen-14b-Q8_0.gguf -v -n blk.1.attn_q.weight -o test.png
@@ -9,7 +10,7 @@
 
 Чего надо
 	Ограничить коэффициенты при квантизации на уровне 1e-5, BF8 (E5M2)
-	Реализовать кодирование и декодирование BitNet.cpp 
+	Реализовать кодирование и декодирование BitNet.cpp `I2S`, BitCPM4 `TQ2_0`
 	Описать высоко производительный CPU+NPU backend __bf16 и __fp16
 	Загрузка моделей и построение графа, экспорт графа
 */
@@ -43,7 +44,7 @@ struct gguf_tensor_info {
 
 	struct gguf_str name;// убрать в хеш таблицу .dynstr
 
-
+//  uint64_t hash[4];// 256 битный хеш от тензора в формате SHA256 и xxh64
 //    uint64_t uuid[2]; // уникальный идентификатор UUIDv5
 }; 
 // static_assert(offsetof(struct gguf_tensor_info,ne)==offsetof(tensor_weight_t, ne));
@@ -61,6 +62,7 @@ struct {
 	[GGML_TYPE_BF16]={1,2},
 	[GGML_TYPE_I32 ]={1,4},
 	[GGML_TYPE_Q8_0]={QK8_0, sizeof(block_q8_0)},
+	[GGML_TYPE_Q8_1]={QK8_1, sizeof(block_q8_1)},
 	[GGML_TYPE_Q4_0]={QK4_0, sizeof(block_q4_0)},
 	[GGML_TYPE_Q4_K]={QK_K,  sizeof(block_q4_K)},
 	[GGML_TYPE_Q5_K]={QK_K,  sizeof(block_q5_K)},
@@ -75,7 +77,7 @@ const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 // QNN
 	[GGML_TYPE_HF8 ]    = "HF8", // E4M3 (Intel conversion rules https://www.intel.com/content/www/us/en/developer/articles/technical/introduction-to-oneapi-ml-common-extensions.html)
 	[GGML_TYPE_BF8 ]    = "BF8", // E5M2
-	[GGML_TYPE_E4M3FN]  = "E4M3FN",// E4M3FN
+//	[GGML_TYPE_E4M3FN]  = "E4M3FN",// E4M3FN
 	
 	[GGML_TYPE_Q4_0]    = "Q4_0",
 	[GGML_TYPE_Q4_1]    = "Q4_1",
@@ -102,8 +104,6 @@ const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 	[GGML_TYPE_I32]     = "I32",
 	[GGML_TYPE_I64]     = "I64",
 	[GGML_TYPE_IQ1_M]   = "IQ1_M",
-	[GGML_TYPE_TQ1_0]   = "TQ1_0",
-	[GGML_TYPE_TQ2_0]   = "TQ2_0",
 	[GGML_TYPE_I2_S]    = "I2_S",
 	[GGML_TYPE_I8_S]    = "I8_S",
 	[GGML_TYPE_TL1]     = "TL1",
@@ -163,7 +163,7 @@ gguf_cxt_t * gguf_init_empty(void) {
         return NULL;
     }
 
-    memcpy(ctx->header.magic, GGUF_MAGIC, sizeof(ctx->header.magic));
+    __builtin_memcpy(ctx->header.magic, GGUF_MAGIC, sizeof(ctx->header.magic));
     ctx->header.version   = GGUF_VERSION;
     ctx->header.n_tensors = 0;
     ctx->header.n_kv      = 0;
@@ -231,14 +231,12 @@ static uint64_t _cname_to_sdnv(QTable_t * ht, const struct gguf_str * p){
 	} else 
 		index = -1;
 	*cname++='\0';
-
 	uint32_t cname_id = _quark_lookup(ht, buf);
 	//printf("cname %s idx=%d %d\n", buf, index, cname_id);
 	if (cname_id==QUARK_UNDEF) {
 		cname_id = _quark_insert(ht, buf);
 		//printf("add cname %s\n", buf);
 	}
-	
 	uint64_t sdnv=0;
 	uint8_t *v = (uint8_t *)&sdnv;
 	v = _sdnv_encode(v, cname_id);
@@ -246,7 +244,7 @@ static uint64_t _cname_to_sdnv(QTable_t * ht, const struct gguf_str * p){
 		v = _sdnv_encode(v, index);
 	return sdnv;
 }
-#define STN_UNDEF 0
+#define STN_UNDEF (~0u)
 #define Nbucket 256
 /*! \brief Структура хеш таблицы для поиска тензоров в файле GGUF */
 typedef struct _HTable HTable_t;
@@ -368,9 +366,6 @@ A=FE15 i=7f0a7ffe (490), P mod 24 = 7, A mod 3 =2
 A=FE04 i=7f01fffe (507), P mod 24 =23, A mod 3 =0
 
 */
-//#define MWCx_A 0xFE04
-//#define MWCx_A 0xFE22 18
-//#define MWCx_A 0xFF3C // 17 90
 #define MWCx_A 0xFF75 // 13 66 66
 //#define MWCx_A 0xFF81
 //#define MWCx_A 0xFFA8
@@ -381,22 +376,11 @@ uint32_t mwc32_hash (uint8_t *data, int length, const uint32_t A){
 	//uint32_t P = (A<<16)-1;
 	uint32_t h = 0xFFFF;
 	for (int i=0 ; i < length ; i++){
-		// h =  h*31u + data[i];// Спасибо Qwen'у за подсказку -- не использую
 		h =  h + data[i];
-		h = (h&0xFFFF)*A + (h>>16);
+		h = (h&0xFFFF)*(MWCx_A) + (h>>16);
+//		h = ((uint8_t)h)*(MWCx_A<<8) + (h>>8);
 	}
     return h;
-}
-
-#define MWC_A0 0xfffeb81bULL
-static uint64_t mwc64_hash(uint64_t seed, const uint8_t *data, size_t size)
-{
-    uint64_t s = seed;
-    for (size_t i = 0; i<size; i++){
-        uint64_t x = s + data[i];
-        s = MWC_A0*(uint32_t)(x) + (x>>32);
-    }
-    return s;
 }
 static
 void _htable_init(HTable_t *htable, uint32_t nbucket) 
@@ -422,7 +406,6 @@ int32_t _htable_lookup_tensor_info(HTable_t *htable, const struct gguf_str *name
 {
 //	uint32_t key = fnv_hash(name->data, name->n);
 	uint32_t key = mwc32_hash(name->data, name->n, MWCx_A);
-//	uint32_t key = mwc64_hash(0, name->data, name->n);
 	uint32_t y = htable->bucket[key % (htable->nbucket)];
     const uint32_t *chain = htable->bucket + htable->nbucket;
 	while (y<htable->nchain && y!=STN_UNDEF) {
@@ -439,7 +422,6 @@ uint32_t _htable_insert_tensor_info(HTable_t *htable, const struct gguf_str *nam
 {
 //	uint32_t key = fnv_hash(name->data, name->n);
 	uint32_t key = mwc32_hash(name->data, name->n, MWCx_A);
-//	uint32_t key = mwc64_hash(0, name->data, name->n);
 	hyst[key%Nbucket]++;
 	uint32_t *chain = htable->bucket + htable->nbucket;
 	uint32_t y = htable->nchain++;
@@ -602,6 +584,8 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
     }
 	fprintf(stdout, "info offset: %lu kB\n", (offset/1024));
     // read the tensor infos
+	QTable_t* qt = _quark_new(256, 512);
+	ctx->qt = qt;
     if (ctx->header.n_tensors > 0) {
 		HTable_t* ht = _htable_new(ctx->header.n_tensors);
 		ctx->htable = ht;
@@ -620,6 +604,7 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
 // сразу в струтуру quarks записать
             res = res && gguf_fread_str(file, &info->name,                       &offset);
             //res = res && gguf_fread_cname(file, (uint8_t)&info->sdnv,              &offset);
+			info->sdnv = _cname_to_sdnv(qt, &info->name);
 			uint32_t n_dims = 0;
             res = res && gguf_fread (file, &n_dims, sizeof(n_dims),  &offset);
 
@@ -663,8 +648,8 @@ gguf_cxt_t * gguf_init_from_file(const char * fname, uint32_t/* struct gguf_init
 		int hh[16] = {0};
 		for(int k=0;k<Nbucket;k++) 
 		if (ht->bucket[k]!=STN_UNDEF) {
-			// uint8_t y = ht->bucket[k];
-			// printf("%3d:%2d '%*s'\n", k, hyst[k], ctx->infos[y].name.n, ctx->infos[y].name.data);
+//			uint8_t y = ht->bucket[k];
+//			printf("%3d:%2d '%*s'\n", k, hyst[k], ctx->infos[y].name.n, ctx->infos[y].name.data);
 			hh[hyst[k]%16] ++;
 		} else hh[0] ++;
 		printf("=== HTABLE H HYST ===\n");
@@ -699,7 +684,7 @@ fprintf(stdout, "data offset: %d kB\n", (uint32_t)(ctx->offset/1024));
     // load the tensor data only if requested
 //	fprintf(stdout, "data offset: %d kB\n", ctx->offset/1024);
     fclose(file);
-
+//_quark_to_csv(qt);
     return ctx;
 }
 /*! \brief построить таблицу имен */
@@ -854,18 +839,39 @@ static int gguf_debug(gguf_cxt_t* ctx){
 	fprintf(stdout, "data offset: %d kB\n", (uint32_t)(ctx->offset/1024));
 }
 
-
-// Загрузить таблицу хэшей
-int gguf_hash_load(gguf_cxt_t * ctx_gguf, char* data, size_t size)
+static uint8_t hex2bin(uint8_t c0, uint8_t c1){// 0x30-0x39 0x41-46 0x61-66
+	unsigned v0 = c0>='a'?c0-'a'+10: (c0>='A'? c0-'A'+10: c0-'0');
+	unsigned v1 = c1>='a'?c1-'a'+10: (c1>='A'? c1-'A'+10: c1-'0');
+	return (v1<<0)|(v0<<4);
+}
+//
+static int strtohash(uint8_t* hash, char *s, char** tail, int tlen){
+	while (isspace(*s)) s++;
+	for (int i = 0; i<tlen; i+=8){
+		if (!isxdigit(s[0]) || !isxdigit(s[1])) return -1;
+		*hash++ = hex2bin(s[0],s[1]);
+		s+=2;
+	}
+	*tail = s;
+	return 0; // SUCCESS
+}
+uint8_t* blk_load(const char* path,  struct gguf_str * name, uint64_t offset, size_t size );
+/*! \brief Загрузить таблицу хэшей из файла .manifest
+	\return 
+ */
+int gguf_hash_load(gguf_cxt_t * ctx_gguf, const char* path, char* data, size_t size)
 {
 	char* s = data;
 	char* e = data + size;
 	char* name = NULL;
+	uint8_t hash[512/8];
 	while(s<e && s[0]!='\0'){
 		if(strncmp(s, "xxh64", 5)==0){
 			s+=6;
-			while (isspace(*s)) s++;
-			uint64_t hash = strtoull(s, &s, 16);
+			strtohash(hash, s, &s, 64);
+			//while (isspace(*s)) s++;
+			uint64_t h64 = __builtin_bswap64(*(uint64_t*)hash);
+			//h64 = strtoull(s, &s, 16);
 			while (s[0]!=':' && s[0]!='\0') s++;
 			if(s[0]==':') {
 				s++;
@@ -876,13 +882,56 @@ int gguf_hash_load(gguf_cxt_t * ctx_gguf, char* data, size_t size)
 				struct gguf_str str = {len, name};
 				int y = _htable_lookup_tensor_info(ctx_gguf->htable, &str, ctx_gguf->infos);
 				if (y>=0) {
-					// ctx_gguf->infos[y].hash[0] = hash;// gguf_tensor_info
-					uint64_t sdnv = ctx_gguf->infos[y].sdnv;
-					printf("xxh64: %016lx #%04lx :`%.*s`\n", hash, sdnv, len, name);	
-				} else 
-					fprintf(stderr, "xxh64: `%.*s` not found\n", len, name);
+					struct gguf_tensor_info * info = &ctx_gguf->infos[y];
+					uint64_t sdnv = info->sdnv;
+					printf("xxh64:  %016"PRIx64" #%04lx :%.*s\n", h64, sdnv, len, name);	
+					size_t   size = _tensor_info_nbytes(info);
+					uint8_t* data = blk_load(path,  NULL, info->offset+ctx_gguf->offset,  size);
+					uint64_t h = 0;
+					if (data != NULL && (h = xxh64(0, data, size))==h64){
+						//printf("xxh64: %016"PRIx64" %s\n", h, "ok");
+					} else {
+						printf("xxh64: %016"PRIx64" offs=%zu, size=%zu %s\n", h, info->offset, size, "fail");
+					}
+					g_free(data);
+				} else {
+					uint64_t sdnv = ctx_gguf->infos[0].sdnv;
+					fprintf(stderr, "xxh64: #%04lx :`%.*s` -- not found\n", sdnv, len, name);
+				}
 			}
 		} else if (strncmp(s, "sha256", 6)==0){
+			s+=7;
+			strtohash(hash, s, &s, 256);
+			while (s[0]!=':' && s[0]!='\0') s++;
+			if(s[0]==':') {
+				s++;
+				name = s;
+				while (isalnum(*s) || *s=='.'|| *s=='_') s++;
+				int len = s - name;
+				// проверить SDNV и загрузить хэш
+				struct gguf_str str = {len, name};
+				int y = _htable_lookup_tensor_info(ctx_gguf->htable, &str, ctx_gguf->infos);
+				if (y>=0) {
+					uint64_t h64 = __builtin_bswap64(*(uint64_t*)hash);
+					struct gguf_tensor_info * info = &ctx_gguf->infos[y];
+					printf("sha256: %016"PRIx64" #%04lx :%.*s\n", h64, info->sdnv, len, name);	
+					size_t size = _tensor_info_nbytes(info);
+					uint8_t* data = blk_load(path,  NULL, info->offset+ctx_gguf->offset,  size);
+					extern void sha256(uint8_t *hash, const uint8_t *data, unsigned int len);
+					sha256(hash, data, size);
+					uint64_t h = __builtin_bswap64(*(uint64_t*)hash);
+					if (data != NULL && h ==h64){
+						// printf("sha256: %016"PRIx64" %s\n", h, "ok");
+					} else {
+						printf("sha256: %016"PRIx64" offs=%zu, size=%zu %s\n", h, info->offset, size, "fail");
+					}
+					g_free(data);
+				}
+			}
+			int len = s - name;
+		} else if (strncmp(s, "sha3-256", 8)==0){
+			s+=9;
+			strtohash(hash, s, &s, 256);
 		} else {
 			fprintf(stderr, "\n");
 			_Exit(1);
@@ -900,27 +949,32 @@ typedef struct _MainOptions MainOptions;
 struct _MainOptions {
 	char*  input_file;
 	char* output_file;
+	char* manifest;
 	char* group;
 	char* device;
 	char* name;// имя параметра для вывода в файл
 
 	int   overwrite;
+	int   verify;	// проверить манифест
 	int   verbose;
 	int   version;
 };
 static MainOptions options= {
+	.input_file = NULL,
     .output_file = NULL,
-
+	.manifest = NULL
 };
 static GOptionEntry entries[] =
 {
   { "input",  	'i', 0, G_OPTION_ARG_FILENAME, &options.input_file,  "input filename", 	"*.gguf"},
   { "output", 	'o', 0, G_OPTION_ARG_FILENAME, &options.output_file, "output filename", "*.gguf" },
+  { "manifest", 'm', 0, G_OPTION_ARG_FILENAME, &options.manifest,    "manifest file", "*.manifest" },
   { "name", 	'n', 0, G_OPTION_ARG_STRING,   &options.name, "name", "blk.*.attn_k.weight" },
 
   { "overwrite",'O', 0, G_OPTION_ARG_NONE, &options.overwrite, "overwtite output", NULL },
+  { "verify", 	'V', 0, G_OPTION_ARG_NONE, &options.verify,  "verify manifest", NULL },
   { "verbose", 	'v', 0, G_OPTION_ARG_NONE, &options.verbose, "Be verbose", NULL },
-  { "version", 	'V', 0, G_OPTION_ARG_NONE, &options.version, "program info", NULL },
+  { "version", 	 0 , 0, G_OPTION_ARG_NONE, &options.version, "program info", NULL },
   { NULL }
 };
 extern int write_png(char *file_name, uint8_t* image, int width, int height);
@@ -944,8 +998,8 @@ float dequantize_row_q4_K(const block_q4_K * restrict x, float * restrict y, int
     for (int i = 0; i < nb; i++) {
         const uint8_t * q = x[i].qs;
 
-        const float d   = GGML_FP16_TO_FP32(x[i].d);//GGML_FP16_TO_FP32
-        const float min =-GGML_FP16_TO_FP32(x[i].dmin);//GGML_FP16_TO_FP32
+        const float d   = GGML_FP16_TO_FP32(x[i].d);
+        const float min =-GGML_FP16_TO_FP32(x[i].dmin);
 
         int is = 0;
         uint8_t sc, m;
@@ -1096,7 +1150,9 @@ static inline int32_t nearest_int(float fval) {
 * Формат f8_1 - кодирование f8[32] и e(E8M0) f8=E4M3FN ; ExpBias = 7
 * Формат f8_2 - кодирование v2f8[32] и e (E8M0) f8=E4M3FN ; ExpBias = 7 - замена для f16 и bf16
 * Формат bf8  - применяется для градиентов (не использует INF), использует насыщение (clamp)
-
+* Формат mxfp8- поддержать
+* Формат mxfp4- поддержать
+* Формат I2S - двухбитный формат для представления тернарных весов {-1,0,1}
 
 	\todo переименовать в Microscale (MXINT8) и MXFP8
 	\todo ввести метод QSNR для характеризации квантового шума
@@ -1149,8 +1205,13 @@ void    quantize_row_q8_K(const float * restrict x, block_q8_K * restrict y, int
 			if (ex<xmin) xmin = ex;
 		}
         y[i].d = ldexpf(1.f, emax-Q);//1/iscale;
-		y[i].ex= emax-Q;
-
+		//y[i].ex= emax-Q;// общая экспонента
+		for (int k = 0; k < Q8K_K/16; ++k) {// сумма квантов \see _mm512_reduce_add_epi32 _reduce_{max|min|add}_
+			int32_t s=0;
+			for (int j = 0; j < 16; ++j)
+				s+=y[i].qs[j+k*16];
+			y[i].bsums[k] = s;
+		}
 		//printf("%d ",emax);
         x += Q8K_K;
     }
@@ -1173,20 +1234,20 @@ uint8_t convert_f32_to_u8_sat_rte(float x){
 }
 #define Q8R_K 32//2 4 8 16 32 -- число строк в плитке
 static 
-void  quantize_tile_q8_T(const float * restrict x, int8_t * qs, ggml_fp16_t * d, unsigned lda) {
+void  quantize_tile_q8_T(const float * restrict x, int8_t * qs, ggml_half * d, unsigned lda) {
     for (int i = 0; i < Q8R_K; ++i){
 		float vmax = -INFINITY;
 		for (int j = 0; j < Q8K_K; ++j)
 			vmax = fmaxf(vmax, fabsf(x[i*lda+j]));
 		
 		_Float16 di = vmax/127.f;//GGML_FP16_TO_FP32(d[i]);
-		d[i] = (ggml_fp16_t)(di);
+		d[i] = (ggml_half)(di);
 		for (int j = 0; j < Q8K_K; ++j)
 			*qs++ = convert_f32_to_i8_sat_rte(x[i*lda+j]/di);
 	}
 }
 static 
-void  quantize_tile_q8_1(const float * restrict x, uint8_t * qs, ggml_fp16_t * d, unsigned lda) {
+void  quantize_tile_q8_1(const float * restrict x, uint8_t * qs, ggml_half * d, unsigned lda) {
     for (int i = 0; i < Q8R_K; ++i){
 		float vmax = -INFINITY;
 		float vmin = +INFINITY;
@@ -1196,30 +1257,87 @@ void  quantize_tile_q8_1(const float * restrict x, uint8_t * qs, ggml_fp16_t * d
 		}
 		_Float16 dmax = (vmax-vmin)/255.f;//GGML_FP16_TO_FP32(d[i]);
 		_Float16 dmin = vmin;//GGML_FP16_TO_FP32(d[i]);
-		d[2*i+0] = (ggml_fp16_t)(dmax);
-		d[2*i+1] = (ggml_fp16_t)(dmin);
+		d[2*i+0] = (ggml_half)(dmax);
+		d[2*i+1] = (ggml_half)(dmin);
 		for (int j = 0; j < Q8K_K; ++j)
 			*qs++ = convert_f32_to_u8_sat_rte((x[i*lda+j]-vmin)/(vmax-vmin)*255.f);
 	}
 }
 static 
-void  dequantize_tile_q8_T(float *  y, const int8_t * qs, ggml_fp16_t * d, unsigned lda) 
+void  dequantize_tile_q8_T(float *  y, const int8_t * qs, ggml_half * d, unsigned lda) 
 {
     for (int i = 0; i < Q8R_K; ++i)
         for (int j = 0; j < Q8K_K; ++j)
             y[i*lda+j] = (d[i]) *qs[i*Q8K_K+j];
 }
 static 
-void  dequantize_tile_q8_1(float *  y, const uint8_t * qs, ggml_fp16_t * d, unsigned lda) 
+void  dequantize_tile_q8_1(float *  y, const uint8_t * qs, ggml_half * d, unsigned lda) 
+{
+    for (int i = 0; i < Q8R_K; ++i){
+		_Float16 r = d[2*i+0];
+		_Float16 m = d[2*i+1];
+        for (int j = 0; j < Q8K_K; ++j)
+            y[i*lda+j] = r *qs[i*Q8K_K+j]+m;
+	}
+}
+//static 
+void  dot_tile_q8_1_f16(float *  y, const uint8_t * qs, ggml_half * d, unsigned lda, ggml_half *v) 
+{
+	float bs = 0;
+    for (int i = 0; i < Q8R_K; ++i)
+		bs += v[i];
+    for (int i = 0; i < Q8R_K; ++i){
+		float s = 0;
+        for (int j = 0; j < Q8K_K; ++j)
+            s+= v[j]*qs[i*Q8K_K+j];
+		y[i] = d[2*i+0]*s + d[2*i+1]*bs;
+	}
+}
+static 
+void  dequantize_tile_q8_1_f16(ggml_half *  y, const uint8_t * qs, ggml_half * d, unsigned lda) 
 {
     for (int i = 0; i < Q8R_K; ++i)
         for (int j = 0; j < Q8K_K; ++j)
             y[i*lda+j] = d[2*i] *qs[i*Q8K_K+j]+d[2*i+1];
 }
+//static 
+void  dot_tile_q8_1(float *  y, const uint8_t * qs, ggml_half * d, const int8_t * xs, ggml_half xd, unsigned lda, int nr) 
+{
+	int32_t bs = 0;
+	for (int j = 0; j < Q8K_K; ++j)
+		bs += xs[j];
+    for (int i = 0; i < nr; ++i){
+		int32_t s = 0;
+		for (int j = 0; j < Q8K_K; ++j)
+			s += qs[i*Q8K_K+j]*xs[j];// (d*qs[j] + z) *(xd*xs[j] + xz)
+		y[i] += xd*(s*d[2*i] + bs*d[2*i+1]);
+	}
+}
+static 
+void  dot_tile_f16(float *  y, ggml_half * a, ggml_half * b, unsigned lda, int nr) 
+{
+    for (int i = 0; i < nr; ++i){
+		float s = 0;
+        for (int j = 0; j < Q8K_K; ++j)
+            s += a[i*Q8K_K+j]*b[j];
+		y[i] = s;
+	}
+}
+static 
+void  dot_tile_bf16(float *  y, ggml_bf16_t * a, ggml_bf16_t * b, unsigned lda, int nr) 
+{
+    for (int i = 0; i < nr; ++i){
+		float s = 0;
+        for (int j = 0; j < Q8K_K; ++j)
+            s += GGML_BF16_TO_FP32(a[i*Q8K_K+j])*GGML_BF16_TO_FP32(b[j]);
+		y[i] = s;
+	}
+}
+
 static
 void convert_matrix_f32_to_q8_1(float*a, uint8_t * qs, unsigned height, unsigned width, unsigned lda)
 {
-	ggml_fp16_t* d = (ggml_fp16_t*)(qs + lda*height);
+	ggml_half* d = (ggml_half*)(qs + lda*height);
 	for (int i = 0; i < height/Q8R_K; ++i){
 		for (int j = 0; j < width/Q8K_K; ++j){
 			quantize_tile_q8_1(a+i*Q8R_K*lda + Q8K_K*j, qs, d, lda);
@@ -1230,7 +1348,7 @@ void convert_matrix_f32_to_q8_1(float*a, uint8_t * qs, unsigned height, unsigned
 static
 void convert_matrix_q8_1_to_f32(float*a, uint8_t * qs, unsigned height, unsigned width, unsigned lda)
 {
-	ggml_fp16_t* d = (ggml_fp16_t*)(qs + lda*height);
+	ggml_half* d = (ggml_half*)(qs + lda*height);
 	for (int i = 0; i < height/Q8R_K; ++i)
 		for (int j = 0; j < width/Q8K_K; ++j){
 			dequantize_tile_q8_1(a+i*Q8R_K*lda + Q8K_K*j, qs, d, lda);
@@ -1240,7 +1358,7 @@ void convert_matrix_q8_1_to_f32(float*a, uint8_t * qs, unsigned height, unsigned
 static
 void convert_matrix_f32_to_q8_T(float*a, int8_t * qs, unsigned height, unsigned width, unsigned lda)
 {
-	ggml_fp16_t* d = (ggml_fp16_t*)(qs + lda*height);
+	ggml_half* d = (ggml_half*)(qs + lda*height);
 	for (int i = 0; i < height/Q8R_K; ++i){
 		for (int j = 0; j < width/Q8K_K; ++j){
 			quantize_tile_q8_T(a+i*Q8R_K*lda + Q8K_K*j, qs, d, lda);
@@ -1251,7 +1369,7 @@ void convert_matrix_f32_to_q8_T(float*a, int8_t * qs, unsigned height, unsigned 
 static
 void convert_matrix_q8_T_to_f32(float*a, int8_t * qs, unsigned height, unsigned width, unsigned lda)
 {
-	ggml_fp16_t* d = (ggml_fp16_t*)(qs + lda*height);
+	ggml_half* d = (ggml_half*)(qs + lda*height);
 	for (int i = 0; i < height/Q8R_K; ++i)
 		for (int j = 0; j < width/Q8K_K; ++j){
 			dequantize_tile_q8_T(a+i*Q8R_K*lda + Q8K_K*j, qs, d, lda);
@@ -1278,6 +1396,22 @@ void print_tile_i8(int8_t*ds, unsigned ib, unsigned jb, unsigned lda){
 	}
 }
 
+//  операция оптимизирована для набора инструкций VNNI 
+float dot_q8_K_q8_K(const block_q8_K * restrict x, const block_q8_K * restrict y, int32_t n) {
+    assert(n % Q8K_K == 0);
+    const int nb = n / Q8K_K;
+	float sum = 0;
+    for (int i = 0; i < nb; i++) {
+		int32_t s = 0;
+        for (int k = 0; k < Q8K_K/16; ++k) {
+			for (int j = 0; j < 16; ++j)
+				s += x[i].qs[j]*y[i].qs[j];// dpbusd VNNI
+			sum += x[i].m*y[i].bsums[k] + y[i].m*x[i].bsums[k];
+		}
+		sum += s*x[i].d*y[i].d;
+	}
+	return sum;
+}
 void  dequantize_row_q8_K(const block_q8_K * restrict x, float * restrict y, int64_t n) {
     assert(n % Q8K_K == 0);
     const int nb = n / Q8K_K;
@@ -1320,19 +1454,16 @@ uint8_t convert_f32_to_f8_e4m3fn(float x, int emax){
 	uint32_t m= (v.u & 0x7FFFFF);
 	if (e==0xFF){// inf or NaN
 		return s|0x7F;
-// e = 0xf
-// m = (m==0)?0:(m>>20)|4; -- qNaN
 	}
 	e-= emax;
-	if (e > (f32_bias+f8_bias) && m>0x700000){// overflow
-		//printf("OVF %d\n", e);
+	v.u -= (emax<<23);
+//	if (e > (f32_bias+f8_bias) && m>0x700000){// overflow
+	if(e > (f32_bias-f8_bias + 15) || (e== (f32_bias-f8_bias + 15) && m >= 0x700000)){
+		printf("OVF %d\n", e);
 		return s|0x7E;//MAX - saturate
-// e = 0xf
-// m = 0 - inf
 	}
 	if (e < (f32_bias-f8_bias-3)){// underflow
 		return s|0;//Zero
-// e = 0, m = 0
 	}
 	if (e <=(f32_bias-f8_bias)){// subnormal
 		uint32_t 
@@ -1346,7 +1477,8 @@ uint8_t convert_f32_to_f8_e4m3fn(float x, int emax){
 	/* round RNE */
 	uint32_t fixup = (m>>20)&1;
 	m = (m + 0x7ffffu+fixup)>>20;
-	return s|(e<<3)|m;
+//	if (m>7 && (e>=1)) printf("SUB %d %x\n", e, m);
+	return s|(e<<3)+m;
 }
 static inline
 uint8_t convert_f32_to_f8_e4m3(float x, int emax){
@@ -1399,7 +1531,7 @@ static float convert_f8_e4m3fn_to_f32(uint32_t x, int emax){
 		v.u|=0x7FC00000;
 		return v.f;
 	} 
-	if ((x&0x78)==0) {// subnormal
+	if ((x&0x78)<=0) {// subnormal
 		int m = (x&7);
 		if (m==0) return v.f;// zero
 		int ex = (__builtin_clz(m)-28);
@@ -1408,8 +1540,23 @@ static float convert_f8_e4m3fn_to_f32(uint32_t x, int emax){
 		v.u+=(x<<20);
 		return v.f;
 	}
-	v.u|= (((x&0x78)>>3) + (f32_bias-f8_bias)+emax)<<23;
-	v.u|=   (x&0x07)<<20;
+	//v.u|= (((x&0x78)>>3) + (f32_bias-f8_bias)+emax)<<23;
+	//v.u|=   (x&0x07)<<20;
+	v.u|= ((x&0x7F)<<20) + (((f32_bias-f8_bias)+emax)<<23);
+	return v.f;
+}
+static float convert_mxfp4_to_f32(uint8_t x, int emax){
+	const int f32_bias = 127;
+	const int fp4_bias = 1;
+
+	union { uint32_t u; float f; } v;
+	v.u =   (x&0x8)<<28;// sign
+	if ((x&7)==7) {// qNaN
+		v.u|=0x7FC00000;
+		return v.f;
+	} 
+	v.u|= (((x&6)>>1) + (f32_bias-fp4_bias)+emax)<<23;
+	v.u|=   (x&1)<<22;
 	return v.f;
 }
 static
@@ -1421,6 +1568,14 @@ static
 void dequantize_row_f8_e4m3fn(float* v, uint8_t * q, size_t k, int emax){
 	for (int i=0; i<k; ++i)
 		v[i] = convert_f8_e4m3fn_to_f32(q[i], emax);
+}
+
+int8_t kvalues_mxfp4[] = {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12};
+static 
+void dequantize_row_mxfp4(float* v, uint8_t * q, size_t k, int emax){
+
+	for (int i=0; i<k; ++i)
+		v[i] = convert_mxfp4_to_f32(q[i], emax);
 }
 #if defined(_WIN32)
     // use FILE * so we don't have to re-open the file to mmap
@@ -1453,10 +1608,12 @@ uint8_t* blk_load(const char* path,  struct gguf_str * name, uint64_t offset, si
 		//fread (blk+offs,1,chank, file);
 	} while(size>offs);
 	fclose(file);
-	// расчитать хеш
+if (0) {
+	// раcсчитать хеш и сохранить его в структуру
 	uint64_t hash = 0;
 	hash = xxh64(hash, blk, size);
 	printf("xxh64\t%llx\t%*s\n", hash, name->n, name->data);
+}
 	return blk;
 }
 #endif
@@ -1660,7 +1817,66 @@ static int test_f8_e4m3fn(){
 	}
 	return 0;
 }
-#ifdef TEST_GGUF
+#if 1 //def TEST_GGUF
+
+#if defined(__F16C__)
+short convert_f32_to_f16(float x){
+	__m128 a = _mm_set_ss(x);
+	return _mm_extract_epi16(_mm_cvtps_ph(a, _MM_FROUND_TO_NEAREST_INT),0);
+}
+#else
+/*! \brief педантичная реализация, бинарно совместима с __F16C__ */
+short convert_f32_to_f16(float x){
+	const int f32_bias = 127;
+	const int fp16_bias = 15;
+	const int DAZ = 0;
+	uint16_t h;
+	union { uint32_t i; float f; } s = {.f = x};
+	uint32_t si = (s.i & 0x80000000u)>>16;
+	uint32_t ex =((s.i & 0x7F800000u)>>23);
+	uint32_t ma = (s.i & 0x007FFFFFu);
+	if (ex == 0xFF) {// INF or NAN
+		h = ma==0? 0x7C00: (ma>>13)|0x7E00;
+	} else
+	if (ex>(f32_bias-fp16_bias)+31 || (ex==(f32_bias-fp16_bias)+31 && ma>0x1000)) {// overflow
+		h = 0x7C00;// INF or MAX
+	} else
+	if (ex< (f32_bias-fp16_bias)-10) {// underflow
+		h = 0;
+	} else
+	if (ex<=(f32_bias-fp16_bias)) {// subnormal
+		if (DAZ) {
+			h = 0;
+		} else {
+			uint32_t m;
+			m = (ma|(1u<<23))>>((f32_bias-fp16_bias)+1 - ex);
+			m|=((ma&0x1FFF)+0x1FFF)>>13;
+			unsigned fixup = (m>>13)&1;
+			h = (m + 0xFFFu+fixup)>>13;
+		}
+	} else {
+		uint32_t fixup = (0xFFFu-((127-15)<<23))+ ((ma>>13)&1);
+		h = ((s.i&0x7FFFFFFFu) + fixup)>>13;
+	}
+	return h | si;
+}
+#endif
+void __attribute__((constructor)) f32_test(){
+	int count =300001;
+    for (uint32_t i = 0; i< 0xFFFF0000; i+=1){
+        float f = *(float*)&i;
+		uint16_t bits = convert_f32_to_f16(f);
+		ggml_fp16_t h2;
+		h2.bits = GGML_FP32_TO_FP16(f);
+		if (bits != h2.bits) {
+			printf ("fixup %08x %04x<>%04x\n", i, (uint32_t)bits, (uint32_t)h2.bits);
+			//if (--count==0) break;
+		}
+    }
+	printf ("fixup test passed\n");
+}
+
+
 int main (int argc, char *argv[]){
 	GError* error=NULL;
 	GOptionContext *opt_context;
@@ -1684,6 +1900,18 @@ int main (int argc, char *argv[]){
 	printf("Tensors ...\n", options.name);
 	if (1) // options.verbose) 
 		gguf_debug(ctx);
+	if (options.manifest!=NULL) {// проверить манифест
+		char*  manifest_data = NULL;
+		size_t manifest_size;
+		GError* error = NULL;
+		int res = g_file_get_contents(options.manifest, &manifest_data, &manifest_size, &error);
+		if (!res) {
+			printf("Can't read manifest file `%s`: %s\n", options.manifest, error->message);
+			_Exit(1);
+		}
+		gguf_hash_load(ctx, path, manifest_data, manifest_size);
+		return 0;
+	}
 	// найти матрицу и показать
 	if (options.name!=NULL && options.output_file!=NULL && g_str_has_suffix(options.output_file, ".png")) {
 		struct gguf_tensor_info * info = NULL;

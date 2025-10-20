@@ -155,7 +155,7 @@ void benchmark_device(const Device_Info& device_info) {
 		kernel_tnn.run();
 		time_sum = fmin(clock.stop(), time_sum);
 	}
-	flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
+	flops_sum = 16*1024.0f*(float)N/(float)time_sum*1E-12f;
 	println("\r| TNN   compute "+alignr(45u, to_string(flops_sum, 3u))+"  TBOPs/s "+fraction(100.0f*flops_sum/device.info.tflops)+" |");
 	time_sum=max_double;
 	print("| Benchmarking ...                                                            |");

@@ -13,13 +13,16 @@
 // Проверки для отладки моделей
 #define GGML_ASSERT(x) 
 
+typedef struct gguf_header gguf_header_t;
+struct gguf_header {
+    char magic[4];
+    uint32_t version;
+    uint64_t n_tensors;
+    uint64_t n_kv;
+};
+
 struct _gguf_ctx {
-	struct gguf_header {
-		char magic[4];
-		uint32_t version;
-		uint64_t n_tensors;
-		uint64_t n_kv;
-	} header;
+	struct gguf_header header;
 	struct gguf_kv* kv;
 	struct gguf_tensor_info* infos;
 	void* data;
@@ -59,6 +62,8 @@ enum ggml_type {
         GGML_TYPE_F16     = 1,
         GGML_TYPE_Q4_0    = 2,
         GGML_TYPE_Q4_1    = 3,
+
+        GGML_TYPE_Q2_0    = 5, // BitCPM4 добавил AG 2025-06-15
         // GGML_TYPE_Q4_2 = 4, support has been removed
         // GGML_TYPE_Q4_3 = 5, support has been removed
         GGML_TYPE_Q5_0    = 6,
@@ -87,38 +92,75 @@ enum ggml_type {
         GGML_TYPE_IQ1_M   = 29,
         GGML_TYPE_BF16    = 30,
         GGML_TYPE_BF8     = 31,// E5M2 -- AG добавил в QNN
-        GGML_TYPE_HF8     = 32,
-        GGML_TYPE_E4M3FN  = 33,
+        GGML_TYPE_HF8     = 32,// E4M3 (Intel HF8) -- AG добавил в QNN
+//        GGML_TYPE_E4M3FN  = 33,// E4M3 -- AG добавил в QNN
         // GGML_TYPE_Q4_0_4_4 = 31, support has been removed from gguf files
         // GGML_TYPE_Q4_0_4_8 = 32,
         // GGML_TYPE_Q4_0_8_8 = 33,
         GGML_TYPE_TQ1_0   = 34,
-        GGML_TYPE_TQ2_0   = 35,
+        GGML_TYPE_TQ2_0   = 35,// BitCPM4
         GGML_TYPE_I2_S    = 36,// BitNet
         GGML_TYPE_I8_S    = 37,
         GGML_TYPE_TL1     = 38,
-        GGML_TYPE_TL2     = 39,
+        // GGML_TYPE_TL2     = 39, -- конфликт с GGML_TYPE_MXFP4
         // GGML_TYPE_IQ4_NL_4_4 = 36,
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
+        GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_COUNT   = 40,
 };
 
-typedef struct { uint16_t bits; } ggml_bf16_t;// E8M7
-typedef _Float16 ggml_fp16_t;
-typedef struct { uint8_t  bits; } ggml_fp8_t;// E4M3FN
+/* Real types 
+typedef __mfp8 float_e5m2_t;
+typedef __mfp8 float_e4m3fn_t;
+*/
+/*! Замечание: На платформе ARM 
+    __fp16 - внутренний формат, и векторные типы образуются от __fp16 
+    _Float16 - внешнее представление. Может потребоваться конвертация см. ACLE
+
+    Arm recommends that software implementations warn on type conversions between __fp16 and _Float16 
+    if __ARM_FP16_FORMAT_ALTERNATIVE == 1.
+
+    ACLE defines the __mfp8 type, which can be used for the E5M2 and E4M3 8-bit floating-point formats (“FP8”). It
+is a storage and interchange only type with no arithmetic operations other than intrinsic calls.
+ */
+typedef union { uint16_t bits; 
+#if defined(__AVX512BF16__) || defined(__AVXNECONVERT__)
+    __bf16 bf;
+#endif
+} ggml_bf16_t;// E8M7
+typedef union { uint16_t bits; 
+    _Float16 hf;
+} ggml_fp16_t;// E5M10
+typedef struct { uint32_t bits; } ggml_tf32_t;// E8M10
+typedef struct { uint8_t  bits; } ggml_hf8_t;// E4M3 (Intel) для совместимости с AVX10.2
 typedef struct { uint8_t  bits; } ggml_bf8_t;// E5M2
-typedef _Float16 ggml_half;
+typedef _Float16 ggml_half;// внешнее представление
 #define QK8_0 32
 typedef struct _block_q8_0 {
     ggml_half d;       // delta
     int8_t  qs[QK8_0]; // quants
 } block_q8_0;
+#define QK8_1 32
+#define GGML_COMMON_AGGR_S
+typedef struct _block_q8_1 {
+    struct {
+        ggml_half d; // delta
+        ggml_half s; // d * sum(qs[i])
+    } GGML_COMMON_AGGR_S;
+    int8_t qs[QK8_1];// quants
+} block_q8_1;
 #define QK4_0 32
 typedef struct _block_q4_0 {
     ggml_half d;           // delta
     uint8_t qs[QK4_0 / 2]; // nibbles / quants
 } block_q4_0;
+
+#define QK2_0 32
+typedef struct _block_q2_0 {
+    ggml_half d;           // delta
+    uint8_t qs[QK2_0 / 4]; // quants
+} block_q2_0;
 
 #define QK_K 256
 #define K_SCALE_SIZE 12
@@ -130,7 +172,7 @@ typedef struct _block_q4_K {
     struct {
 		ggml_half d;    // super-block scale for quantized scales
 		ggml_half dmin; // super-block scale for quantized mins
-    };
+    } GGML_COMMON_AGGR_S;
     uint8_t scales[K_SCALE_SIZE]; // scales and mins, quantized with 6 bits
     uint8_t qs[QK_K/2];           // 4--bit quants
 } block_q4_K;
@@ -142,7 +184,7 @@ typedef struct _block_q5_K {
 	struct {
 		ggml_half d;    // super-block scale for quantized scales
 		ggml_half dmin; // super-block scale for quantized mins
-	};
+	} GGML_COMMON_AGGR_S;
     uint8_t scales[K_SCALE_SIZE]; // scales and mins, quantized with 6 bits
     uint8_t qh[QK_K/8];           // quants, high bit
     uint8_t qs[QK_K/2];           // quants, low 4 bits
@@ -161,11 +203,33 @@ typedef struct _block_q6_K {
 // This is only used for intermediate quantization and dot products
 #define Q8K_K 32
 typedef struct _block_q8_K {
-    float   d;              // delta
-	int8_t  ex;
-    int16_t  qs[Q8K_K];       // quants
+//	int8_t  ex;
+    uint8_t  qs[Q8K_K];      // quants
+    ggml_half   d;              // delta
+    ggml_half   m;              // min
     int16_t bsums[Q8K_K/16]; // sum of quants in groups of 16
 } block_q8_K;
+typedef struct _block_tq2_0 {
+    uint8_t qs[QK_K/4];     // 2 bits per element
+    ggml_half d;    
+} block_tq2_0;
+// static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
+#define QK_MXFP4 32
+typedef struct {
+    uint8_t e; // E8M0
+    uint8_t qs[QK_MXFP4/2];
+} block_mxfp4;
+#define QK_MXFP8 32
+typedef struct {
+    uint8_t e; // E8M0
+    uint8_t qs[QK_MXFP8];
+} block_mxfp8;
+#define QK_MXINT8 32
+typedef struct {
+    uint8_t e; // E8M0
+    uint8_t qs[QK_MXINT8];
+} block_mxint8;
+//static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 block size/padding");
 
 extern
 const char*  GGML_TYPE_NAME[GGML_TYPE_COUNT];
@@ -189,7 +253,6 @@ static inline size_t gguf_type_size(enum gguf_type type) {
 #else
 	#define GGML_FP16_TO_FP32(x) (_Float16)(x)
 #endif
-
 /**
  * Converts brain16 to float32
  *
@@ -230,6 +293,32 @@ static inline float ggml_compute_bf16_to_fp32(ggml_bf16_t h) {
     u.i = (uint32_t)h.bits << 16;
     return u.f;
 }
+/* можно преобразовать напрямую если известно, что число не содержит INF и NaN */
+static inline _Float16 ggml_compute_bf16_to_fp16(ggml_bf16_t h) {
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.i = (uint32_t)h.bits << 16;
+    return GGML_FP32_TO_FP16(u.f);
+}
+static inline float ggml_e8m0_to_fp32(uint8_t x) {
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.i = x!=0? (uint32_t)x<<23 : 0x00400000u;
+    return u.f;
+}
+static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.i = x>2? (uint32_t)(x-1)<<23 : 0x00200000u<<x;
+    return u.f;
+}
+
 /*! \brief Converts brain8 to float16
  *
  * The bfloat8 (E5M2) floating point format has the following structure:
@@ -267,6 +356,9 @@ static inline float ggml_convert_bf8_to_f32(ggml_bf8_t in)
  */
 static inline ggml_bf16_t ggml_compute_fp32_to_bf16(float s) {
     ggml_bf16_t h;
+#if defined(__AVX512BF16__)
+    h.bf= _mm_cvtness_sbh(s);
+#else
     union {
         float f;
         uint32_t i;
@@ -278,6 +370,7 @@ static inline ggml_bf16_t ggml_compute_fp32_to_bf16(float s) {
     }
     /* RNE round */
     h.bits = (u.i + (0x7fff + ((u.i >> 16) & 1))) >> 16;
+#endif
     return h;
 }
 static inline ggml_bf16_t ggml_compute_fp32_to_bf16_rnaz(float s) {
@@ -295,35 +388,71 @@ static inline ggml_bf16_t ggml_compute_fp32_to_bf16_rnaz(float s) {
     h.bits = (u.i + 0x8000) >> 16;
     return h;
 }
+static inline ggml_tf32_t ggml_compute_fp32_to_tf32(float s) {
+    ggml_tf32_t h;
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.f = s;
+    if ((u.i & 0x7fffffff) > 0x7f800000) { /* nan */
+        h.bits = u.i | (64<<16); /* force to quiet */
+    } else {/* RNE round */
+        h.bits = u.i + (0x1fff + ((u.i >> 14) & 1));
+    }
+    h.bits &= 0xFFFFE000u;
+    return h;
+}
+
 /* bf8 (E5M2) s.11111.00 = INF, s.11111.xx = NaN 
 	\see <https://arxiv.org/pdf/2209.05433>
-    \see <https://patents.google.com/patent/US20240248720A1/en>
+    \see Instructions to convert from fp16 to bf8 <https://patents.google.com/patent/US20240248720A1/en>
+    \see https://github.com/libxsmm/libxsmm/blob/main/src/libxsmm_math.c
  */
-static inline ggml_bf8_t ggml_compute_fp16_to_bf8(float s) {
+static inline ggml_bf8_t ggml_compute_fp16_to_bf8(_Float16 s) {
     ggml_bf8_t h;
     union {
         _Float16 f;
         uint16_t i;
     } u;
     u.f = s;
-    if ((u.i & 0x7fff) > 0x7c00) { /* nan */
-        h.bits = (u.i >> 8) | 2; /* force to quiet */
-        return h;
+    if ((u.i & 0x7c00) >= 0x7c00) {// inf or nan
+        u.i = ((u.i & 0x7c00) == 0x7c00) ? u.i : (u.i | 0x0200);/* force to quiet */ 
+    } else 
+    {/* RNE round */
+        const uint16_t fixup = ((u.i >> 8) & 1);
+        u.i = (u.i + 0x7fu + fixup);
     }
-/*    if ((u.i & 0x7fff) == 0x7c00) {// infty
-        h.bits = (u.i >> 8);
-        return h;
-    } */
-    /* RNE round */
-    unsigned fixup = ((u.i >> 8) & 1);
-    h.bits = (u.i + 0x7fu + fixup) >> 8;
+    h.bits = u.i >> 8;
     return h;
 }
+/*!
+    \param seed случайная величина из генератора PRNG, используется 8 бит 
+ */
+static inline ggml_bf8_t ggml_compute_fp16_to_bf8_stochastic(_Float16 s, unsigned int seed) {
+    ggml_bf8_t h;
+    union { _Float16 f; uint16_t i; } u;
+    u.f = s;
+    if ((u.i & 0x7c00) >= 0x7c00) {// inf or nan
+        u.i = ((u.i & 0x7c00) == 0x7c00) ? u.i : (u.i | 0x0200);/* force to quiet */ 
+    } else 
+    if ((u.i & 0x7c00) != 0x0000) { /* only round normal numbers */
+        const uint16_t fixup = seed & 0x00ff;
+        u.i = (u.i + fixup);
+    } else { /* RNE for subnormal */
+        const uint16_t fixup = (u.i >> 8) & 1;
+        u.i = (u.i + 0x007f + fixup);
+    }
+    h.bits = u.i >> 8;
+    return h;
+}
+
 #if 0// https://github.com/libxsmm/libxsmm/blob/main/src/libxsmm_math.c
+исходно см. https://patentimages.storage.googleapis.com/0d/96/d3/1ab325d9d67232/EP4318224A1.pdf
 LIBXSMM_API libxsmm_hfloat8 libxsmm_convert_f16_to_hf8_rne(libxsmm_float16 in)
 {
   unsigned int f16_bias = 15;
-  unsigned int f8_bias = 7;
+  unsigned int f8_bias = 7;// note that a variable bias may be used
   libxsmm_hfloat8 res = 0;
   unsigned short s, e, m, e_f16, m_f16;
   unsigned int fixup;
@@ -387,7 +516,7 @@ LIBXSMM_API libxsmm_hfloat8 libxsmm_convert_f16_to_hf8_rne(libxsmm_float16 in)
   return res;
 }
 #endif
-/*
+/* FINITE ONLY Saturated overflow
 
 
 */
@@ -401,32 +530,38 @@ static inline uint8_t ggml_compute_fp16_to_fp8_e4m3fn(_Float16 h) {
     v.h = h;
     uint8_t  s= (v.bits&0x8000u)>> 8;
     uint8_t ex= (v.bits&0x7c00u)>>10;
-    uint8_t  m;
-
+    uint16_t m;
+    uint16_t ma = (v.bits&0x03FFu);
     if (ex==0x1f){// inf or nan, 
-        return s|((v.bits&0x03FFu)==0? 0x7E: 0x7F);
+        return s|(ma==0? 0x7E:0x7F);// = s.7F (NAN)
     } else 
-    if (ex> (f16_bias+fp8_bias)){// overflow
-        return s|0x7E;// MAX
+    if ((ex >  (f16_bias - fp8_bias + 15)) ||
+       ((ex == (f16_bias - fp8_bias + 15)) && (ma > 0x0340))){
+
+//    if (ex> (f16_bias+fp8_bias))   // overflow
+        return s|0x7E;              // = s.7E (MAX)
     } else
     if (ex< (f16_bias-fp8_bias-3)){ // underflow
-        return s|0;
+        ex = 0x0; m = 0x0;          // = s.00 (ZERO)
     } else
-    if (ex<=(f16_bias-fp8_bias)){ // denormal
-// описать ... 
+    if (ex<=(f16_bias-fp8_bias)){   // denormal
+        m = (ma|0x0400)>>((f16_bias-fp8_bias)+1 - ex);
+        m|=((ma&0x007F)+0x007F)>>7;
+        /* RNE Round */
         uint16_t fixup = (m>>7)&1;
-        m = (m + (uint16_t)(0x3f+fixup))>>7;
+        m = (m + (uint16_t)(0x003f+fixup))>>7;
         ex = 0;
-    } else {// normal
+    } else {// normal можно упростить (v+(C-E)+fixup)>>M, где C=0x003F, E=(f16_bias-fp8_bias)<<m1, M=(m1-m2)
         uint16_t fixup = (v.bits>>7)&1;
         v.bits = v.bits + (uint16_t)(0x3fu+fixup);
         ex=((v.bits&0x7c00)>>10) - (f16_bias-fp8_bias);
-        m = (v.bits&0x3FF)>>7;
+        m = (v.bits&0x03FF)>>7;
     }
 
     return s|(ex<<3)|m;
     
 }
+
 static inline uint8_t ggml_compute_fp16_to_fp8(_Float16 s) {
     const int f16_bias = 15;
     const int fp8_bias =  7;
@@ -437,43 +572,40 @@ static inline uint8_t ggml_compute_fp16_to_fp8(_Float16 s) {
     v.h = s;
     uint8_t si= (v.bits&0x8000u)>> 8;
     uint8_t ex= (v.bits&0x7c00u)>>10;
-    uint8_t  m= 0;
+    uint16_t m= 0;
     uint16_t ma= (v.bits&0x03ffu);
 
     if (ex==0x1f){// inf or nan, 
         ex = 0xf;
-        m  = ma==0? 0: (ma>>7)|4;
-        // если e4m3fn то NaN => s.7F, INF= s.7E (MAX)
-        // m  = ma==0? 0x7E: 0x7F;
+        m  = 0x7;
     } else 
-    if (ex> (f16_bias+fp8_bias)){// overflow
+    if ((ex >  (f16_bias - fp8_bias + 15)) ||
+       ((ex == (f16_bias - fp8_bias + 15)) && (ma > 0x0340))){// overflow
+//    if (ex> (f16_bias+fp8_bias))
         ex = 0xf; m=0;
-        // если e4m3fn то INF= s.7E (MAX)
     } else
     if (ex< (f16_bias-fp8_bias-3)){ // underflow
         ex=0, m = 0;
-        // если e4m3fn то INF= s.0 (ZERO)
     } else 
     if (ex<=(f16_bias-fp8_bias)){ // denormal
-        m = ma|0x0400;
-        m = m>>((f16_bias-fp8_bias)+1 - ex);
-        m|= ((ma&0x007F)+0x007F)>>7;
+        m = (ma|0x0400)>>((f16_bias-fp8_bias)+1 - ex);
+        m|=((ma&0x007F)+0x007F)>>7;
         /* RNE Round */
         unsigned fixup = (m>>7)&1;
-        m = (m + (uint16_t)(0x3f+fixup))>>7;
+        m = (m + (uint16_t)(0x003f+fixup))>>7;
         ex = 0;
     } else {// normal
         uint16_t fixup = (ma>>7)&1;
         v.bits = v.bits + (uint16_t)(0x3fu+fixup);
         ex=((v.bits&0x7c00)>>10) - (f16_bias-fp8_bias);
-        m = (v.bits&0x3FF)>>7;
+        m = (v.bits&0x03FF)>>7;
     }
     return si|(ex<<3)|m;
 }
 // https://onnx.ai/onnx/technical/float8.html
 static inline uint8_t ggml_compute_fp32_to_bf8(float s) {
-    const int f32_bias =127;
-    const int bf8_bias = 15;// может использовать смещение 16
+    const int f32_bias =127;// E8M23 =(1<<(E-1) -1) 
+    const int bf8_bias = 15;// E5M2
     union {
         float f;
         uint32_t bits;
@@ -481,38 +613,92 @@ static inline uint8_t ggml_compute_fp32_to_bf8(float s) {
     v.f = s;
     uint8_t si = (v.bits&0x80000000u)>>24;
     uint8_t ex = (v.bits&0x7F800000u)>>23;
-    uint8_t  m;
+    uint32_t m;
     uint32_t ma = (v.bits&0x007FFFFFu);
     if (ex==0xFF){// inf & nan
+        ex = 0x1f;
         m  = ma==0? 0: (ma>>21)|2;
     } else
     if (ex> (f32_bias+bf8_bias)) {// overflow
         ex = 0x1f; m = 0;
     } else
-    if (ex< (f32_bias-bf8_bias-2)) {// underflow
+    if (ex< (f32_bias-bf8_bias)-2) {// underflow -2 для E5M2
         ex = 0; m = 0;
     } else
     if (ex<=(f32_bias-bf8_bias)) {// denornal
-        m = ma | 0x00800000u;
-        m = m>>((f32_bias-bf8_bias)+1 - ex);
-        m|= (((ma&0x1ffffu)+0x1ffffu)>>21);
+        m =   (ma|0x00800000u)>>((f32_bias-bf8_bias)+1 - ex);
+        m|= (((ma&0x001fffffu)+0x1fffffu)>>21);// 23-2
+        ex = 0;
+        uint32_t fixup = (m>>21)&1;
+        m = (m + 0xfffffu+fixup)>>21;// adc
     } else 
-    {// normal
-        m = (v.bits + 0x7ffff + ((ma >> 20) & 1)) >> 20;
+    {// normal (v+(C-E)+fixup)>>M, где C=0x003F, E=(f16_bias-fp8_bias)<<m1, M=(m1-m2)
+        uint32_t fixup = (v.bits>>21)&1;
+        v.bits = v.bits + 0xfffffu+fixup;
+        ex=((v.bits&0x7F800000u)>>23) - (f32_bias-bf8_bias);
+        m = (v.bits&0x007FFFFFu)>>21;
+    }
+    return si|(ex<<2)|m;
+}
+// Intel HF8 format
+static inline uint8_t ggml_compute_fp32_to_hf8(float s) {
+    const int f32_bias =127;// E8M23 =(1<<(E-1) -1) 
+    const int hf8_bias =  7;// E4M3
+    union {
+        float f;
+        uint32_t bits;
+    } v;
+    v.f = s;
+    uint8_t si = (v.bits&0x80000000u)>>24;
+    uint8_t ex = (v.bits&0x7F800000u)>>23;
+    uint32_t m;
+    uint32_t ma = (v.bits&0x007FFFFFu);
+    if (ex==0xFF){// inf & nan
+        ex = 0xf;
+        m  = ma==0? 0: (ma>>20)|4;// INF:qNAN
+    } else
+    if (ex> (f32_bias+hf8_bias)) {// overflow
+        ex = 0xf; m = 0;// INF
+    } else
+    if (ex< (f32_bias-hf8_bias)-3) {// underflow -3 для E4M3
+        ex = 0; m = 0;// ZERO
+    } else
+    if (ex<=(f32_bias-hf8_bias)) {// denornal
+        m =   (ma|0x00800000u)>>((f32_bias-hf8_bias)+1 - ex);
+        m|= (((ma&0xfffffu)+0xfffffu)>>20);// 23-3
+        ex = 0;
+        uint32_t fixup = (m>>20)&1;
+        m = (m + 0x7ffffu+fixup)>>20;// adc
+    } else 
+    {// normal (v+(C-E)+fixup)>>M, где C=0x003F, E=(f16_bias-fp8_bias)<<m1, M=(m1-m2)
+        uint32_t fixup = (v.bits>>20)&1;
+        v.bits = v.bits + 0x7ffffu+fixup;
+        ex=((v.bits&0x7F800000u)>>23) - (f32_bias-hf8_bias);
+        m = (v.bits&0x007FFFFFu)>>20;
     }
     return si|(ex<<3)|m;
 }
 // https://patentimages.storage.googleapis.com/0d/96/d3/1ab325d9d67232/EP4318224A1.pdf
 
+#define GGML_FP32_TO_E8M0(x) (((x)&0x7F800000u)>>23)
+#define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
+#define GGML_BF16_TO_E8M0(x) (((x)&0x7F80u)>>7)
+
+#define GGML_FP32_TO_TF32(x) ggml_compute_fp32_to_tf32(x)
 #define GGML_FP32_TO_BF16(x) ggml_compute_fp32_to_bf16(x)
 #define GGML_BF16_TO_FP32(x) ggml_compute_bf16_to_fp32(x)
+#define GGML_BF16_TO_FP16(x) ggml_compute_bf16_to_fp16(x)
 #define GGML_BF16_TO_FP8(x)  ggml_compute_bf16_to_fp8(x)
 #define GGML_FP8_TO_BF16(x)  ggml_compute_fp8_to_bf16(x)
-
+#define GGML_FP32_TO_BF8(x)  ggml_compute_fp32_to_bf8(x)
+#define GGML_BF8_TO_FP32(x)  ggml_compute_bf8_to_fp32(x)
+#define GGML_FP32_TO_HF8(x)  ggml_compute_fp32_to_hf8(x)
+#define GGML_HF8_TO_FP32(x)  ggml_compute_hf8_to_fp32(x)
 #define GGML_FP16_TO_BF8(x)  ggml_compute_fp16_to_bf8(x)
 #define GGML_BF8_TO_FP16(x)  ggml_compute_bf8_to_fp16(x)
-#define GGML_FP4_TO_FP8(x)   ggml_compute_fp4_to_fp8(x)
+#define GGML_HF8_TO_FP16(x)  ggml_compute_hf8_to_fp16(x)
 #define GGML_FP8_TO_FP4(x)   ggml_compute_fp8_to_fp4(x)
+#define GGML_FP4_TO_FP8(x)   ggml_compute_fp4_to_fp8(x)
 /* Продолжения не будет Из FP8 не сделать BF4 (E4M0) останется только экспонента */
 
 
@@ -804,10 +990,10 @@ const char * ggml_type_name(enum ggml_type type) {
 
 static inline
 void * _slice_alloc(struct ggml_context* ctx, size_t size){
-    void * data = ctx->mem_buffer + ctx->mem_offs;
+    uint8_t * data = (uint8_t*)ctx->mem_buffer + ctx->mem_offs;
     ctx->mem_offs += size;
     ctx->n_objects++;
-    return data;
+    return (void*)data;
 }
 static inline 
 struct ggml_tensor * ggml_tensor_new(
@@ -1265,8 +1451,9 @@ struct ggml_tensor * ggml_pool_2d(
     int                   k1,
     int                   s0,
     int                   s1,
-    float                 p0,
-    float                 p1) 
+    // padding, описан как float см. ggml.c
+    int                 p0,
+    int                 p1) 
 {
 
     const size_t ne[4] = {
@@ -1276,7 +1463,7 @@ struct ggml_tensor * ggml_pool_2d(
         a->ne[3],
     };
     struct ggml_tensor * tensor = ggml_tensor_new(ctx, GGML_TYPE_F32, ne);
-
+// тут точно должно быть пребразование p0 в int? эта проблема есть и в ggml.c
     int32_t params[] = { op, k0, k1, s0, s1, p0, p1 };
     ggml_set_op_params(tensor, params, sizeof(params));
 
@@ -1414,7 +1601,8 @@ struct gguf_context {
 
     //uint8_t * padding;
     void * data;
-    HTable_t * htable;
+    HTable_t * htable;// хэш таблица для поиска тензоров
+    QTable_t * qt;    // хэш таблица для шаблонов имен
 };
 
 extern uint64_t xxh64(uint64_t hash, uint8_t* data, size_t data_len);

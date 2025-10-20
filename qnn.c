@@ -240,10 +240,13 @@ void ggml_format_name(struct ggml_tensor *tensor, enum _name_suffix suffix_id, c
 
 struct _type_traits type_traits[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I32]     = {.blck_size = 1, .type_size = sizeof(int32_t)},
+    [GGML_TYPE_I8 ]     = {.blck_size = 1, .type_size = sizeof(int8_t)},
+    [GGML_TYPE_I16]     = {.blck_size = 1, .type_size = sizeof(int16_t)},
     [GGML_TYPE_F64]     = {.blck_size = 1, .type_size = sizeof(double)},
     [GGML_TYPE_F32]     = {.blck_size = 1, .type_size = sizeof(float)},
     [GGML_TYPE_F16]     = {.blck_size = 1, .type_size = sizeof(ggml_fp16_t)},
     [GGML_TYPE_BF16]    = {.blck_size = 1, .type_size = sizeof(ggml_bf16_t)},
+    [GGML_TYPE_Q2_0]    = {.blck_size = QK2_0, .type_size = sizeof(block_q2_0)},
     [GGML_TYPE_Q4_0]    = {.blck_size = QK4_0, .type_size = sizeof(block_q4_0)},
 //    [GGML_TYPE_Q4_1]    = {.blck_size = QK4_1, .type_size = sizeof(block_q4_1)},
 //    [GGML_TYPE_Q5_0]    = {.blck_size = QK5_0, .type_size = sizeof(block_q5_0)},
@@ -254,3 +257,21 @@ struct _type_traits type_traits[GGML_TYPE_COUNT] = {
     [GGML_TYPE_Q6_K]    = {.blck_size = QK_K, .type_size = sizeof(block_q6_K)},
     [GGML_TYPE_Q8_K]    = {.blck_size = QK_K, .type_size = sizeof(block_q8_K)},
 };
+
+
+#if 0
+uint8x64_t _ternary_l2n(uint8x64_t a.p, uint8x64_t a.m){
+    return _mm512_popcnt_epi8(a.p) + _mm512_popcnt_epi8(a.m);
+//    return __builtin_popcount(a.p) + __builtin_popcount(a.m);
+}
+uint8x64_t _ternary_dot(uint8x64_t a.p, uint8x64_t a.m, uint8x64_t b.p, uint8x64_t b.m){
+    return _mm512_sub_epi8(
+            _mm512_popcnt_epi8((a.p & b.p) | (a.m & b.m)),
+            _mm512_popcnt_epi8((a.p & b.m) | (a.m & b.p)));
+}
+int32_t _ternary_act(uint8x64_t v, uint8x64_t th){
+    c.p = _mm512_cmpge_epi8_mask(v, thp);
+    c.m = _mm512_cmple_epi8_mask(v, thm);
+    return c;
+}
+#endif

@@ -143,12 +143,12 @@ kernel void kernel_shoup_uint(global float* data) {
 		data[get_sub_group_id()] = as_float(s1);
 	}
 }
-kernel void kernel_tnn_uint_(global float* data) {
+kernel void kernel_tnn_uint(global float* data) {
 	int ix = get_sub_group_local_id();
 	ushort2 x = as_ushort2(data[ix+get_sub_group_id()*get_max_sub_group_size()]);
 	ushort2 d = 0;
 	float v = data[ix];
-	for(uint i=0u; i<512u; i++) {
+	for(uint i=0u; i<1024u; i++) {
 		ushort2 y = as_ushort2(v);
 		ushort2 r0 = x&y;
 		ushort2 r1 = x&y.s10;
@@ -156,12 +156,12 @@ kernel void kernel_tnn_uint_(global float* data) {
 		d += popcount(r0);
 		d -= popcount(r1);
 	}
-	data[get_global_id(0)] = d.x+d.y;
-//	uint s = sub_group_reduce_add(d.x+d.y);
-//	if (ix==0) 
-//		data[get_sub_group_id()] = as_float(s);
+//	data[get_global_id(0)] = d.x+d.y;
+	uint s = sub_group_reduce_add(d.x+d.y);
+	if (ix==0) 
+		data[get_sub_group_id()] = as_float(s);
 }
-kernel void kernel_tnn_uint(global uint2* data) {
+kernel void kernel_tnn_uint2(global uint2* data) {
 	int ix = get_sub_group_local_id();
 	uint2 x = as_uint2(data[ix+get_sub_group_id()*get_max_sub_group_size()]);
 	uint2 d = 0;
@@ -207,6 +207,7 @@ kernel void kernel_char(global float* data) {
 	}
 	data[get_global_id(0)] = as_float(y);
 }
+
 //cl_khr_subgroup_clustered_reduce
 //	int a = dot((char4){ 0, 2,0, 0}, d);
 //	float c = sub_group_clustered_reduce_add(a*u,4)*0.5f;
@@ -243,10 +244,12 @@ kernel void kernel_sigma(global float* data) {
 	}
 	data[get_global_id(0)] = as_float(y);
 }
+static inline float _matrix_mad_tf32_tf32_k16( int v, int8 b, float acc )
+{
 static inline float _matrix_mad_f16_f16_k32( int v, int8 b, float acc )
 {
 )+"#if defined(cl_intel_subgroup_matrix_multiply_accumulate)"+R(
-#if 1//
+#if 0//
 	acc = intel_sub_group_f16_f16_matrix_mad_k16(as_short2(v).x,b,acc);
 	acc = intel_sub_group_f16_f16_matrix_mad_k16(as_short2(v).y,b,acc);
 	return acc;
