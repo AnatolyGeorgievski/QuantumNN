@@ -5,6 +5,7 @@
         "string_view": "cpp",
         "ranges": "cpp",
         "span": "cpp",
-        "vector": "cpp"
+        "vector": "cpp",
+        "random": "cpp"
     }
 }

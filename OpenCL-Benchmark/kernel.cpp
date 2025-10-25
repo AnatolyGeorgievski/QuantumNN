@@ -207,6 +207,25 @@ kernel void kernel_char(global float* data) {
 	}
 	data[get_global_id(0)] = as_float(y);
 }
+__attribute__((intel_reqd_sub_group_size(16)))
+kernel void kernel_warp(global float* data) {
+
+	uint ix = get_sub_group_local_id();
+	half2 x = as_half2(data[get_global_id(0)]);
+	half2 y = as_half2(data[get_local_id(0)]);
+	float s = 0;
+	for(uint i=0u; i<512u; i+=get_max_sub_group_size()) {
+		float a = data[i+ix];
+		for(uint k=0u; k<get_max_sub_group_size(); k++) 
+		{
+			s += dot(as_half2(sub_group_broadcast(a,k)),x);
+			s += dot(as_half2(sub_group_broadcast(a,k)),y);
+		}
+//		sub_group_reduce_add(sum);
+	}
+	data[get_global_id(0)] = as_float(s);
+}
+
 
 //cl_khr_subgroup_clustered_reduce
 //	int a = dot((char4){ 0, 2,0, 0}, d);
@@ -247,7 +266,7 @@ kernel void kernel_sigma(global float* data) {
 static inline float _matrix_mad_f16_f16_k32( int v, int8 b, float acc )
 {
 )+"#if defined(cl_intel_subgroup_matrix_multiply_accumulate)"+R(
-#if 0//
+#if 1//
 	acc = intel_sub_group_f16_f16_matrix_mad_k16(as_short2(v).x,b,acc);
 	acc = intel_sub_group_f16_f16_matrix_mad_k16(as_short2(v).y,b,acc);
 	return acc;

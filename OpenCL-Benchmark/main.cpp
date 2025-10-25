@@ -117,6 +117,17 @@ void benchmark_device(const Device_Info& device_info) {
 	println("\r| DP4A  compute "+alignr(45u, to_string(flops_char, 3u))+"  TIOPs/s "+fraction(100.0f*flops_char/device.info.tflops)+" |");
 
 //  George 2024-2025
+	float flops_sum;
+	time_sum=max_double;
+	print("| Benchmarking ...                                                            |");
+	Kernel kernel_warp(device, N, "kernel_warp", buffer);
+	for(uint i=0u; i<N_kernel; i++) {
+		clock.start();
+		kernel_warp.run();
+		time_sum = fmin(clock.stop(), time_sum);
+	}
+	flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
+	println("\r| WARP  compute "+alignr(45u, to_string(flops_sum, 3u))+"  TBOPs/s "+fraction(100.0f*flops_sum/device.info.tflops)+" |");
 	time_sum=max_double;
 	print("| Benchmarking ...                                                            |");
 	Kernel kernel_mad(device, N, "kernel_mad", buffer);
@@ -125,7 +136,7 @@ void benchmark_device(const Device_Info& device_info) {
 		kernel_mad.run();
 		time_sum = fmin(clock.stop(), time_sum);
 	}
-	float flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
+	flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
 	println("\r| MAD   compute "+alignr(45u, to_string(flops_sum, 3u))+"  TBOPs/s "+fraction(100.0f*flops_sum/device.info.tflops)+" |");
 	time_sum=max_double;
 	print("| Benchmarking ...                                                            |");
