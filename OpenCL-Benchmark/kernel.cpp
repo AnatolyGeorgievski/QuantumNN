@@ -244,8 +244,6 @@ kernel void kernel_sigma(global float* data) {
 	}
 	data[get_global_id(0)] = as_float(y);
 }
-static inline float _matrix_mad_tf32_tf32_k16( int v, int8 b, float acc )
-{
 static inline float _matrix_mad_f16_f16_k32( int v, int8 b, float acc )
 {
 )+"#if defined(cl_intel_subgroup_matrix_multiply_accumulate)"+R(
