@@ -97,7 +97,18 @@ kernel void kernel_mad(global float* data) {
 	}
 	data[get_global_id(0)] = as_float(y);
 }
-
+kernel void kernel_mwc(global float* data) {
+	const uint A = 0xFFFEB81B;
+	uint x = ~get_global_id(0);
+	uint y = ~get_local_id(0);
+	uint r;
+	for(uint i=0u; i<512u; i++) {
+		r = (x*A + y); // 2 operations
+		y = mad_hi(x,A,y); // 2 operations
+		x = r;
+	}
+	data[get_global_id(0)] = as_float(y);
+}
 
 kernel void kernel_mod_uint(global float* data) {
 	int ix = get_sub_group_local_id();

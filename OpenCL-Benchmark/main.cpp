@@ -140,6 +140,16 @@ void benchmark_device(const Device_Info& device_info) {
 	println("\r| MAD   compute "+alignr(45u, to_string(flops_sum, 3u))+"  TBOPs/s "+fraction(100.0f*flops_sum/device.info.tflops)+" |");
 	time_sum=max_double;
 	print("| Benchmarking ...                                                            |");
+	Kernel kernel_mwc(device, N, "kernel_mwc", buffer);
+	for(uint i=0u; i<N_kernel; i++) {
+		clock.start();
+		kernel_mwc.run();
+		time_sum = fmin(clock.stop(), time_sum);
+	}
+	flops_sum = 1024.0f*(float)N/(float)time_sum*1E-12f;
+	println("\r| MWC   compute "+alignr(45u, to_string(flops_sum, 3u))+"  TBOPs/s "+fraction(100.0f*flops_sum/device.info.tflops)+" |");
+	time_sum=max_double;
+	print("| Benchmarking ...                                                            |");
 	Kernel kernel_sum(device, N, "kernel_sigma", buffer);
 	for(uint i=0u; i<N_kernel; i++) {
 		clock.start();
