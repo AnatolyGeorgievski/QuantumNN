@@ -1272,7 +1272,7 @@ void cholesky_ldl_solve(const float * L, float *z, const float* c)
 		z[i] = z[i] - s;
 	}
 }
-/*! \brief вычисление детерминта из разложения холецкого
+/*! \brief вычисление детерминта из разложения Холецкого
 
 В случае A=LL^T разложения получается две треугольные матрицы
  det(A) = det(L)*det(L^T)
@@ -1281,10 +1281,10 @@ void cholesky_ldl_solve(const float * L, float *z, const float* c)
  det(A) = \prod_{k=1}^{N} d_{kk}
  */
 float cholesky_ldl_det(const float * L){
-	float s=0;
-	for (int i=0; i<N; i++)
-		s *= L[i*N+i];
-	return s;
+	float d = L[0];
+	for (int i=1; i<N; i++)
+		d *= L[i*N+i];
+	return d;
 }
 
 /*! Раздел полиномы, хотим реализовать шаблон класса полиномы с учетом замены операции 
