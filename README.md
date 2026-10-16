@@ -49,3 +49,37 @@
   
 * [RNS- Residue Number System](doc/RNS.md) Система остаточных классов
   -- Непозиционная система целых чисел основанная на Теореме об остатках CRT, применяется в ZKP и совместима PQC
+
+## Чтение
+
+> ::TAGS:: класс, квант, остаток, обратимость, linalg, opencl, zkp, rns, пазл, фрактал
+> ::TOC::
+> - [Чтение](#чтение)
+> - [Журнал по меткам](log/2026-10-15.md)
+
+Цель курса — безмасштабная вычислительная сеть для уравнений квантовой физики. Математика вводится как класс: множество и методы на нём. Три опоры:
+
+1. Математические классы. Группа, кольцо, поле, тело. Это зерно остальной математики в программировании.
+2. Квантизатор. Смена разрядности, компенсация остатка округления, шаг времени. Рациональная дробь остатка не создаёт. Плавающая точка его создаёт и возвращает в следующий шаг.
+3. Обратимость. Оператор читается в обе стороны, когда сохранено полное состояние: регистры задержки и остатки. Стохастическое округление сидит на детерминированном генераторе и на том же остатке.
+
+Слои конспектов:
+
+| слой | документы |
+|---|---|
+| класс и мера | [MATHAN.md](MATHAN.md), [PROB.md](PROB.md), [LOGIC.md](LOGIC.md) |
+| операторы | [LINALG.md](LINALG.md), [FractionFree.md](FractionFree.md), [DSP.md](DSP.md), [POLY.md](POLY.md), [QINT.md](QINT.md) |
+| квант | [QUANT.md](QUANT.md), [FPQUANT.md](FPQUANT.md) |
+| тензор и запуск | [LLaMa.md](LLaMa.md), [OpenCL-Benchmark](OpenCL-Benchmark/README.md), [inbox](inbox/benchmark.cl), [VisualEmbedding.md](VisualEmbedding.md) |
+| пост-квантовая арифметика | [ZeroKnowledge.md](ZeroKnowledge.md), [RNS.md](RNS.md) |
+
+Повторное чтение начинается со строки `> ::TAGS::` в [log/2026-10-15.md](log/2026-10-15.md), затем открывается только названное место.
+
+Кросс-ссылки первого уровня. Чужой репозиторий — адрес `blob/main`.
+
+| метка | документ |
+|---|---|
+| класс, canon, пазл | [Ring-3](https://github.com/AnatolyGeorgievski/godminer/blob/main/docs/R3_README.md) |
+| класс, мост | [разворот из зерна](https://github.com/AnatolyGeorgievski/Security/blob/main/log/2026-10-14%20%D1%80%D0%B0%D0%B7%D0%B2%D0%BE%D1%80%D0%BE%D1%82%20%D0%B8%D0%B7%20%D0%B7%D0%B5%D1%80%D0%BD%D0%B0.md#форма-разворота) |
+| throughput, prng | [журнал MWC128](https://github.com/AnatolyGeorgievski/MWC128/blob/main/log/2026-10-15.md) |
+| react, herd | [фрактальная карта e9pro](https://github.com/AnatolyGeorgievski/godminer/blob/main/log/2026-10-14%20%D1%84%D1%80%D0%B0%D0%BA%D1%82%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F%20%D0%BA%D0%B0%D1%80%D1%82%D0%B0%20e9pro.md#следующая-стыковка) |
