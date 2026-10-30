@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Шаг 2a: геометрический patch embedding — im2col(P×P×C) + линейная проекция E.
-Не полный mmproj / ViT. Сверка OpenCL vs CPU. Ассемблерный лист — см. opencl/отладка-тензорный-ассемблер.md."""
+Не полный mmproj / ViT. Сверка OpenCL vs CPU.
+Ассемблерный лист: fixtures/eye/asm/ (дамп mtmd), не отдельный md."""
 from __future__ import annotations
-import argparse, sys
+import argparse
+import sys
+
 import numpy as np
+
+from ocl_dev import pick_device
 
 KERNEL = r"""
 kernel void im2col_rgb(
@@ -29,8 +34,8 @@ kernel void im2col_rgb(
 }
 
 kernel void gemm_nt(
-        global const float *A,  // M x K  (patches × P²C)
-        global const float *B,  // E x K  (weights, row-major)
+        global const float *A,  // M x K
+        global const float *B,  // E x K
         global float *C,        // M x E
         uint M, uint E, uint K) {
     uint m = get_global_id(0);
@@ -57,11 +62,10 @@ def cpu_patch_emb(img: np.ndarray, W: np.ndarray, P: int) -> np.ndarray:
             patch = img[oy * P : (oy + 1) * P, ox * P : (ox + 1) * P, :].reshape(-1)
             cols[t] = patch
             t += 1
-    # C = cols @ W.T  → (M, E)
     return cols @ W.T
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-d", type=int, default=0)
     ap.add_argument("-P", type=int, default=16)
@@ -88,8 +92,7 @@ def main():
     print("(next mmproj: RESHAPE/TRANSPOSE/CONT · ADD bias · ADD pos · ViT)")
     print()
 
-    devs = [d for p in cl.get_platforms() for d in p.get_devices()]
-    dev = devs[args.d]
+    dev = pick_device(cl, args.d)
     print(f"device[{args.d}]: {dev.name}")
     print(f"op: patch_emb  P={P}  S={S}  E={E}  M={M}  K={K}")
 
@@ -109,7 +112,6 @@ def main():
     queue.finish()
 
     err = float(np.max(np.abs(got - expect)))
-    # float32 GEMM: ~K fused mul-adds; 1e-3 ok for K~768 smoke (not bit-exact)
     ok = err < 1e-3
     print(f"max_abs_err={err:.3e}  {'OK' if ok else 'FAIL'}")
     return 0 if ok else 1

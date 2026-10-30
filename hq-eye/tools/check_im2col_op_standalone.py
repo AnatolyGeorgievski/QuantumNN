@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Шаг 1: im2col_tile vs CPU. Самодостаточный (ядро внутри)."""
 from __future__ import annotations
-import argparse, sys
+import argparse
+import sys
+
 import numpy as np
+
+from ocl_dev import pick_device
 
 KERNEL = r"""
 kernel void im2col_tile(
@@ -32,7 +36,7 @@ def cpu_im2col_tile(src: np.ndarray, P: int) -> np.ndarray:
     return out.reshape(-1)
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-d", type=int, default=0)
     ap.add_argument("-P", type=int, default=16)
@@ -43,8 +47,8 @@ def main():
     if args.S % args.P:
         print("S must be multiple of P", file=sys.stderr)
         return 1
-    devs = [d for p in cl.get_platforms() for d in p.get_devices()]
-    dev = devs[args.d]
+
+    dev = pick_device(cl, args.d)
     print(f"device[{args.d}]: {dev.name}")
     print(f"op: im2col_tile  P={args.P}  S={args.S}")
 
@@ -59,7 +63,9 @@ def main():
     buf_s = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=host_src.ravel())
     nout = (H // P) * (W // P) * P * P
     buf_d = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, size=nout * 4)
-    prg.im2col_tile(queue, (W // P, H // P), None, buf_s, buf_d, np.uint32(W), np.uint32(H), np.uint32(P))
+    prg.im2col_tile(
+        queue, (W // P, H // P), None, buf_s, buf_d, np.uint32(W), np.uint32(H), np.uint32(P)
+    )
     got = np.empty(nout, dtype=np.float32)
     cl.enqueue_copy(queue, got, buf_d)
     queue.finish()

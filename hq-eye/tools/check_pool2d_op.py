@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Шаг: POOL_2D avg (s==k, pad=0) vs CPU. Gemma3 mmproj ступень."""
+"""Шаг: POOL_2D avg (s==k, pad=0) vs CPU. Gemma3 mmproj ступень.
+LWS = POOL_SG (16): один subgroup на WG, не preferred WG multiple."""
 from __future__ import annotations
-import argparse, sys
+import argparse
+import sys
 from pathlib import Path
+
 import numpy as np
 
-KERNEL = (Path(__file__).resolve().parents[1] / "opencl" / "grain" / "pool_2d_tile.cl").read_text(encoding="utf-8")
+from ocl_dev import pick_device
+
+ROOT = Path(__file__).resolve().parents[1]
+KERNEL = (ROOT / "opencl" / "grain" / "pool_2d_tile.cl").read_text(encoding="utf-8")
+POOL_SG = 16
 
 
 def cpu_pool_avg(src: np.ndarray, k: int) -> np.ndarray:
-    # src: [C,H,W] → [C,H/k,W/k]
     C, H, W = src.shape
     assert H % k == 0 and W % k == 0
     oh, ow = H // k, W // k
@@ -22,7 +28,7 @@ def cpu_pool_avg(src: np.ndarray, k: int) -> np.ndarray:
     return out
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-d", type=int, default=0)
     ap.add_argument("-S", type=int, default=56, help="side (patches_per_side typical)")
@@ -37,35 +43,22 @@ def main():
         return 1
     oh = ow = S // k
     rng = np.random.default_rng(0)
-    # layout for kernel: planes of H×W contiguous; we store [C,H,W]
     src = rng.standard_normal((C, S, S), dtype=np.float32)
     expect = cpu_pool_avg(src, k)
-
-    # kernel expects [im][H][W] with ne00=W ne01=H — same as [C,H,W] row-major
     host = src.ravel()
 
-    devs = [d for p in cl.get_platforms() for d in p.get_devices()]
-    dev = devs[args.d]
+    dev = pick_device(cl, args.d)
     print(f"device[{args.d}]: {dev.name}")
-    print(f"op: pool_2D_avg  S={S} k={k} C={C} -> {oh}x{ow}")
+    print(f"op: pool_2D_avg  S={S} k={k} C={C} -> {oh}x{ow}  LWS={POOL_SG}")
 
     ctx = cl.Context([dev])
     queue = cl.CommandQueue(ctx)
-    prg = cl.Program(ctx, KERNEL).build()
+    prg = cl.Program(ctx, KERNEL).build(options=[f"-DPOOL_SG={POOL_SG}"])
 
     buf_s = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=host)
     buf_d = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, size=C * oh * ow * 4)
 
-    # preferred subgroup
-    try:
-        sg = cl.Kernel(prg, "pool_2D_avg").get_work_group_info(
-            cl.kernel_work_group_info.PREFERRED_WORK_GROUP_SIZE_MULTIPLE, dev
-        )
-    except Exception:
-        sg = 16
-    if not sg:
-        sg = 16
-
+    sg = POOL_SG
     prg.pool_2D_avg(
         queue,
         (ow * sg, oh, C),
