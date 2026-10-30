@@ -1,0 +1,40 @@
+.-----------------------------------------------------------------------------.
+|----------------.------------------------------------------------------------|
+| Device ID    0 | Intel(R) Arc(TM) A770 Graphics                             |
+|----------------'------------------------------------------------------------|
+| Compiling ...                                                               ||----------------.------------------------------------------------------------|
+| Device ID      | 0                                                          |
+| Device Name    | Intel(R) Arc(TM) A770 Graphics                             |
+| Device Vendor  | Intel(R) Corporation                                       |
+| Device Driver  | 26.05.037020 (Linux)                                       |
+| OpenCL Version | OpenCL C 3.0                                               |
+| Compute Units  | 512 at 2400 MHz (4096 cores, 19.661 TFLOPs/s)              |
+| Memory, Cache  | 16287 MB VRAM, 16384 KB global / 64 KB local               |
+| Buffer Limits  | 4095 MB global, 4194296 KB constant                        |
+|----------------'------------------------------------------------------------|
+| Info: OpenCL C code successfully compiled.                                  |
+| FP64  compute                                          not supported        |
+| Benchmarking ...                                                            || FP32  compute                                        12.210 TFLOPs/s (2/3 ) |
+| Benchmarking ...                                                            || FP16  compute                                        18.754 TFLOPs/s ( 1x ) |
+| Benchmarking ...                                                            || INT64 compute                                         1.323  TIOPs/s (1/16) |
+| Benchmarking ...                                                            || INT32 compute                                         5.765  TIOPs/s (1/3 ) |
+| Benchmarking ...                                                            || INT16 compute                                        36.193  TIOPs/s ( 2x ) |
+| Benchmarking ...                                                            || DP4A  compute                                        36.747  TIOPs/s ( 2x ) |
+| Benchmarking ...                                                            || WARP  compute                                         2.916  TBOPs/s (1/8 ) |
+| Benchmarking ...                                                            || MAD   compute                                         2.822  TBOPs/s (1/8 ) |
+| Benchmarking ...                                                            || MWC   compute                                         2.397  TBOPs/s (1/8 ) |
+| Benchmarking ...                                                            || SUM   compute                                         1.605  TBOPs/s (1/12) |
+| Benchmarking ...                                                            || MOD   compute                                         6.152  TBOPs/s (1/3 ) |
+| Benchmarking ...                                                            || TNN   compute                                        86.938  TBOPs/s ( 4x ) |
+| Benchmarking ...                                                            || MMA.h compute                                       225.756  TIOPs/s ( 12x) |
+| Benchmarking ...                                                            || Memory Bandwidth ( block read          )                       1746.10 GB/s |
+| Memory Bandwidth ( block write         )                       4220.00 GB/s |
+| Benchmarking ...                                                            || Memory Bandwidth ( coalesced read      )                        242.54 GB/s |
+| Memory Bandwidth ( coalesced      write)                        426.26 GB/s |
+| Benchmarking ...                                                            || Memory Bandwidth (misaligned read      )                        405.09 GB/s |
+| Memory Bandwidth (misaligned      write)                        449.76 GB/s |
+| Benchmarking ...                                                            || PCIe   Bandwidth (send                 )                          9.10 GB/s |
+| Benchmarking ...                                                            || PCIe   Bandwidth (   receive           )                         10.35 GB/s |
+| Benchmarking ...                                                            || PCIe   Bandwidth (        bidirectional)            (Gen4 x16)   11.01 GB/s |
+|-----------------------------------------------------------------------------|
+'-----------------------------------------------------------------------------'
