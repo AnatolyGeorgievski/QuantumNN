@@ -63,6 +63,9 @@ def main() -> int:
     buf_s = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=host_src.ravel())
     nout = (H // P) * (W // P) * P * P
     buf_d = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, size=nout * 4)
+    # контракт глубины 2: S кратно P; dst на полную нарезку
+    assert H % P == 0 and W % P == 0 and H == W == args.S
+    assert (H // P) * (W // P) * P * P == H * W
     prg.im2col_tile(
         queue, (W // P, H // P), None, buf_s, buf_d, np.uint32(W), np.uint32(H), np.uint32(P)
     )

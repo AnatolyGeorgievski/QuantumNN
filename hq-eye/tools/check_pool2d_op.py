@@ -59,6 +59,9 @@ def main() -> int:
     buf_d = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, size=C * oh * ow * 4)
 
     sg = POOL_SG
+    # контракт глубины 2: local==POOL_SG; покрытие s==k pad=0
+    assert sg == POOL_SG and sg != 64
+    assert S % k == 0 and oh * k == S and ow * k == S
     prg.pool_2D_avg(
         queue,
         (ow * sg, oh, C),

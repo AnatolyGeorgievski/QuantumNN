@@ -105,6 +105,8 @@ def main() -> int:
     buf_w = cl.Buffer(ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=W.ravel())
     buf_out = cl.Buffer(ctx, cl.mem_flags.WRITE_ONLY, size=M * E * 4)
 
+    # контракт глубины 2: кратность и формы буферов
+    assert S % P == 0 and M == (S // P) * (S // P) and K == P * P * 3
     prg.im2col_rgb(queue, (S // P, S // P), None, buf_img, buf_col, np.uint32(S), np.uint32(S), np.uint32(P))
     prg.gemm_nt(queue, (M, E), None, buf_col, buf_w, buf_out, np.uint32(M), np.uint32(E), np.uint32(K))
     got = np.empty((M, E), dtype=np.float32)
