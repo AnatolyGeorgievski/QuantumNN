@@ -83,6 +83,7 @@
 | метка | документ |
 |---|---|
 | класс, canon, пазл | [Ring-3](https://github.com/AnatolyGeorgievski/godminer/blob/main/docs/R3_README.md) |
+| чтение, закон, этика | [R3-trinity](https://github.com/AnatolyGeorgievski/R3-trinity) |
 | класс, мост | [разворот из зерна](https://github.com/AnatolyGeorgievski/Security/blob/main/log/2026-10-14%20%D1%80%D0%B0%D0%B7%D0%B2%D0%BE%D1%80%D0%BE%D1%82%20%D0%B8%D0%B7%20%D0%B7%D0%B5%D1%80%D0%BD%D0%B0.md#форма-разворота) |
 | throughput, prng | [журнал MWC128](https://github.com/AnatolyGeorgievski/MWC128/blob/main/log/2026-10-15.md) |
 | react, herd | [фрактальная карта e9pro](https://github.com/AnatolyGeorgievski/godminer/blob/main/log/2026-10-14%20%D1%84%D1%80%D0%B0%D0%BA%D1%82%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F%20%D0%BA%D0%B0%D1%80%D1%82%D0%B0%20e9pro.md#следующая-стыковка) |
