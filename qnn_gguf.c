@@ -60,25 +60,41 @@ struct {
 	[GGML_TYPE_F32]	={1,4},
 	[GGML_TYPE_F16]	={1,2},
 	[GGML_TYPE_BF16]={1,2},
-	[GGML_TYPE_I32 ]={1,4},
+	[GGML_TYPE_I8 ] ={1,1},
+	[GGML_TYPE_I16]={1,2},
+	[GGML_TYPE_I32]={1,4},
+	[GGML_TYPE_I64]={1,8},
+	[GGML_TYPE_HF8 ]={1, sizeof(ggml_hf8_t)}, /* = F8_E4M3 */
+	[GGML_TYPE_BF8 ]={1, sizeof(ggml_bf8_t)},
+	[GGML_TYPE_F8_E4M3]={1, sizeof(ggml_hf8_t)},
 	[GGML_TYPE_Q8_0]={QK8_0, sizeof(block_q8_0)},
 	[GGML_TYPE_Q8_1]={QK8_1, sizeof(block_q8_1)},
 	[GGML_TYPE_Q4_0]={QK4_0, sizeof(block_q4_0)},
+	[GGML_TYPE_Q2_0]={QK2_0, sizeof(block_q2_0)},
 	[GGML_TYPE_Q4_K]={QK_K,  sizeof(block_q4_K)},
 	[GGML_TYPE_Q5_K]={QK_K,  sizeof(block_q5_K)},
 	[GGML_TYPE_Q6_K]={QK_K,  sizeof(block_q6_K)},
 	[GGML_TYPE_Q8_K]={QK_K,  sizeof(block_q8_K)},
+	[GGML_TYPE_TQ1_0]={1, 0}, /* блок TBD */
+	[GGML_TYPE_TQ2_0]={QK_K/4, sizeof(block_tq2_0)},
+	[GGML_TYPE_MXFP4]={QK_MXFP4, sizeof(block_mxfp4)},
+	/* NVFP4/Q1_0: блочная раскладка как в llama.cpp-next — struct ещё не заведён */
+	[GGML_TYPE_NVFP4]={1, 0},
+	[GGML_TYPE_Q1_0 ]={1, 0},
 };
 const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 	[GGML_TYPE_F64 ]    = "F64",
 	[GGML_TYPE_F32 ]    = "F32",
 	[GGML_TYPE_F16 ]    = "F16",
 	[GGML_TYPE_BF16]    = "BF16",
-// QNN
-	[GGML_TYPE_HF8 ]    = "HF8", // E4M3 (Intel conversion rules https://www.intel.com/content/www/us/en/developer/articles/technical/introduction-to-oneapi-ml-common-extensions.html)
-	[GGML_TYPE_BF8 ]    = "BF8", // E5M2
-//	[GGML_TYPE_E4M3FN]  = "E4M3FN",// E4M3FN
-	
+	/* QNN holes / aliases — номера как в qnn.h */
+	[GGML_TYPE_BF8 ]    = "BF8",      /* 31 E5M2 */
+	[GGML_TYPE_HF8 ]    = "HF8",      /* 43 = F8_E4M3 */
+	[GGML_TYPE_F8_E4M3] = "F8_E4M3",  /* 43 next name */
+	[GGML_TYPE_I2_S]    = "I2_S",     /* 36 BitNet */
+	[GGML_TYPE_I8_S]    = "I8_S",     /* 37 */
+	[GGML_TYPE_TL1]     = "TL1",      /* 38 */
+
 	[GGML_TYPE_Q4_0]    = "Q4_0",
 	[GGML_TYPE_Q4_1]    = "Q4_1",
 	[GGML_TYPE_Q5_0]    = "Q5_0",
@@ -104,14 +120,12 @@ const char* GGML_TYPE_NAME[GGML_TYPE_COUNT] = {
 	[GGML_TYPE_I32]     = "I32",
 	[GGML_TYPE_I64]     = "I64",
 	[GGML_TYPE_IQ1_M]   = "IQ1_M",
-	[GGML_TYPE_I2_S]    = "I2_S",
-	[GGML_TYPE_I8_S]    = "I8_S",
-	[GGML_TYPE_TL1]     = "TL1",
-//	[GGML_TYPE_TL2]     = "TL2",
-	[GGML_TYPE_I2_S]    = "I2_S",// BitNet
-	[GGML_TYPE_TQ1_0]	= "TQ1_0",
-	[GGML_TYPE_TQ2_0]	= "TQ2_0",
-	[GGML_TYPE_MXFP4]	= "MXFP4"
+	[GGML_TYPE_TQ1_0]   = "TQ1_0",
+	[GGML_TYPE_TQ2_0]   = "TQ2_0",
+	[GGML_TYPE_MXFP4]   = "MXFP4",
+	[GGML_TYPE_NVFP4]   = "NVFP4",
+	[GGML_TYPE_Q1_0]    = "Q1_0",
+	[GGML_TYPE_Q2_0]    = "Q2_0",
 	};
 	const size_t GGUF_TYPE_SIZE[GGUF_TYPE_COUNT] = {
 		[GGUF_TYPE_UINT8 ]  = sizeof(uint8_t),
