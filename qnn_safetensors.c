@@ -14,7 +14,7 @@ gcc -O3 -mf16c -D_FILE_OFFSET_BITS=64 -o qnn-st qnn_safetensors.c json.c `pkgcon
 ```
 Модель может быть разбита на части (HF: model.safetensors-00001-of-00011.safetensors + index.json;
 FP8 Qwen: layers-N.safetensors + index). Рецепт сравнения с hf8-block:
-qnn-backend-ocl/tools/quantize/REPRO-fp8.md.
+QuantumNN/tools/quantize/REPRO-fp8.md.
 
 Пример работы, вывод в формате JSON (PyTorch)
 ```json

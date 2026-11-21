@@ -42,6 +42,9 @@
 * [LLaMa.cpp OpenCL backend](LLaMa.md)  
   -- разработка OpenCL Backend под Intel GPU
 
+* [tools/quantize](tools/quantize/README.md)  
+  -- канон `qnn.h` + `qnn-encode` (hf8/bf8/hf8-block) + [REPRO-fp8](tools/quantize/REPRO-fp8.md); разбор `qnn_safetensors.c`
+
 * [Visual Embedding](VisualEmbedding.md)  
   -- Обзор методов сравнения изображений по Embedding-векторам. Компьютерное зрение и Visual Language Models (VLM)
   
